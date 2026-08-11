@@ -38,7 +38,9 @@ bool dz_game_apply(dz_game *game, uint8_t from, uint8_t to,
                    const uint8_t *captured, uint8_t num_captured);
 
 /* Runs the minimax engine for time_limit_ms and writes the best move.
-   Returns false if the position has no legal moves. */
+   Returns false if the position has no legal moves.
+   NOTE: not thread-safe — serialize concurrent calls to dz_game_best_move
+   (single global zobrist seed). */
 bool dz_game_best_move(const dz_game *game, uint32_t time_limit_ms, dz_move *out);
 
 bool dz_game_over(const dz_game *game);

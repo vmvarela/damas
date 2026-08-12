@@ -31,7 +31,7 @@ pub fn requestValidMove(
             .note = note,
         }) catch |err| switch (err) {
             error.InvalidLlmResponse => {
-                note = "Reply with ONLY the JSON object {\"move\": <number>, \"reasoning\": \"...\"} — nothing else.";
+                note = "Reply with ONLY the JSON object {\"move\": <number>} — nothing else.";
                 continue;
             },
             else => |e| return e,

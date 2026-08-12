@@ -58,7 +58,7 @@ pub fn buildPrompt(
     for (moves, 0..) |m, i| {
         try w.print("{d}: {d},{d}{s}\n", .{ i, m.from, m.to, if (m.num_captured > 0) " (capture)" else "" });
     }
-    try w.print("\nReply with ONLY compact JSON: {{\"move\": <number>, \"reasoning\": \"<short text>\"}}. The number must be one of the legal move numbers above.", .{});
+    try w.print("\nReply with ONLY compact JSON: {{\"move\": <number>}}. The number must be one of the legal move numbers above.", .{});
     if (note.len > 0) {
         try w.print("\n\n{s}", .{note});
     }

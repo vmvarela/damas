@@ -3,3 +3,5 @@
 .zig-cache/
 .envrc
 zig-out/
+
+.playwright-mcp/

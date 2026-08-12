@@ -60,6 +60,19 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.installArtifact(ws);
+
+        // Terminal UI app (SPEC §2). The real code lives in apps/tui/main.zig,
+        // but Zig 0.16 requires the module root to contain all imported source
+        // files, so the executable root is the project-root anchor tui_root.zig.
+        const tui = b.addExecutable(.{
+            .name = "damas-tui",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tui_root.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        b.installArtifact(tui);
     }
 
     const test_step = b.step("test", "Run core, C API, LLM, and WebSocket tests");

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Damas Z — Spanish Checkers</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>Damas Z</h1>
+      <div class="connection" id="connection" aria-live="polite">
+        <span class="dot" id="dot"></span>
+        <span class="label" id="conn-label">connecting…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="board-wrap" aria-label="Checkers board">
+        <div class="board" id="board" role="grid" aria-label="8 by 8 checkers board"></div>
+        <div class="busy" id="busy" hidden>
+          <span>thinking…</span>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="status-card">
+          <div class="turn-row">
+            <span class="turn-label">Turn</span>
+            <span class="turn-value" id="turn">white</span>
+          </div>
+          <div class="winner-banner" id="winner" hidden></div>
+          <p class="status-line" id="status" aria-live="polite">Waiting for server…</p>
+        </div>
+
+        <div class="controls">
+          <button id="btn-new" type="button">New game</button>
+          <button id="btn-engine" type="button">Engine move</button>
+          <div class="llm-row">
+            <button id="btn-llm" type="button">LLM move</button>
+            <input id="model" type="text" value="llama-3.3-70b-versatile" aria-label="LLM model" placeholder="model">
+          </div>
+          <label class="toggle">
+            <input id="auto" type="checkbox">
+            <span>Auto-play opponent</span>
+          </label>
+        </div>
+
+        <div class="history-card">
+          <h2>Move history</h2>
+          <ol id="history" class="history" aria-label="Move history"></ol>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -102,9 +102,10 @@ pub fn run() !void {
     };
     cfg_loaded = true;
 
-    var game = try game_mod.Game.init(allocator);
-    errdefer game.deinit();
+    const game = try game_mod.Game.init(allocator);
 
+    // State owns game: State.deinit() frees it. No errdefer here — a second
+    // free on error return would double-free (state.deinit runs first).
     var state = State.init(allocator, cfg, cfg_loaded, game);
     defer restoreTerminal(&state);
     defer state.deinit();

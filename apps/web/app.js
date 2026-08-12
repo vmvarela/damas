@@ -23,6 +23,7 @@
   const btnLlm = document.getElementById('btn-llm');
   const modelInput = document.getElementById('model');
   const autoToggle = document.getElementById('auto');
+  const rulesSelect = document.getElementById('rules');
 
   let ws = null;
   let reconnectTimer = null;
@@ -67,6 +68,7 @@
     btnEngine.disabled = v;
     btnLlm.disabled = v;
     btnNew.disabled = v;
+    rulesSelect.disabled = v;
   }
 
   function connect() {
@@ -85,6 +87,8 @@
       moveHistory = [];
       selectedSq = null;
       setStatus('Reconnected — game reset.');
+      // No explicit rules: the server applies its default (the --rules flag);
+      // the first state response syncs the selector via handleState.
       send({ action: 'new_game' });
     });
 
@@ -301,6 +305,10 @@
 
     state = msg;
 
+    // Reflect the server's effective variant (covers a server that rejected an invalid value).
+    // Changing the select mid-game is fine — it applies on the next new_game, no auto-restart.
+    if (msg.rules) rulesSelect.value = msg.rules;
+
     if (msg.last_move && (msg.last_move.from !== undefined && msg.last_move.to !== undefined)) {
       const last = msg.last_move;
       const prev = moveHistory.length ? moveHistory[moveHistory.length - 1] : null;
@@ -337,7 +345,7 @@
     moveHistory = [];
     selectedSq = null;
     setBusy(true);
-    send({ action: 'new_game' });
+    send({ action: 'new_game', rules: rulesSelect.value });
   });
 
   btnEngine.addEventListener('click', () => {

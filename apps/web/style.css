@@ -229,25 +229,25 @@ html, body {
   gap: 0.6rem;
 }
 
-button, input[type="text"] {
+button, input[type="text"], select {
   font: inherit;
   border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.12);
   padding: 0.55rem 0.9rem;
 }
 
-button {
+button, select {
   background: var(--wood-mid);
   color: var(--cream);
   cursor: pointer;
   transition: background 0.15s ease, transform 0.08s ease;
 }
 
-button:hover { background: var(--wood-light); }
+button:hover, select:hover { background: var(--wood-light); }
 
-button:active { transform: translateY(1px); }
+button:active, select:active { transform: translateY(1px); }
 
-button:disabled {
+button:disabled, select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

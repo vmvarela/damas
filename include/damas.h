@@ -22,6 +22,14 @@ typedef struct dz_move {
 } dz_move;
 
 dz_game *dz_game_new(void);
+/* Rule variants: 0 = English (default), 1 = Spanish. */
+#define DZ_RULES_ENGLISH 0
+#define DZ_RULES_SPANISH 1
+/* Creates a game with the given rules variant; NULL if `rules` is invalid
+   (anything other than 0 or 1). */
+dz_game *dz_game_new_with_rules(uint8_t rules);
+/* Active rule variant of the game: 0 = English, 1 = Spanish. */
+uint8_t dz_game_rules(const dz_game *game);
 void dz_game_free(dz_game *game);
 
 /* Piece codes: 0 empty, 1 white_pawn, 2 white_king, 3 black_pawn, 4 black_king. */

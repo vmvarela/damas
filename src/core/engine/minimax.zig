@@ -18,6 +18,7 @@ pub const Piece = board_mod.Piece;
 pub const Board32 = board_mod.Board32;
 pub const Move = move_mod.Move;
 pub const MoveList = move_mod.MoveList;
+pub const Variant = rules.Variant;
 pub const TranspositionTable = tt_mod.TranspositionTable;
 pub const TTFlag = tt_mod.TTFlag;
 pub const Timer = timer_mod.Timer;
@@ -40,18 +41,19 @@ const SearchCtx = struct {
     nodes: u64 = 0,
     aborted: bool = false,
     root_best: Move = undefined,
+    variant: Variant,
 };
 
 /// Time-limited search with iterative deepening. Returns the best move from
 /// the deepest completed iteration. Deterministic for a given position and
 /// time limit (fixed Zobrist seed, fresh TT per call).
-pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.mem.Allocator) !SearchResult {
+pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.mem.Allocator, variant: Variant) !SearchResult {
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
-    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(time_limit_ms) };
+    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(time_limit_ms), .variant = variant };
 
     var moves = MoveList{};
-    rules.generateMoves(board, turn, &moves);
+    rules.generateMoves(board, turn, &moves, variant);
     if (moves.len == 0) return error.NoMoves;
 
     var best = moves.slice()[0];
@@ -71,13 +73,13 @@ pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.me
 }
 
 /// Fixed-depth search (no time limit). Depth 0 is clamped to 1.
-pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Allocator) !SearchResult {
+pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Allocator, variant: Variant) !SearchResult {
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
-    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(0) };
+    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(0), .variant = variant };
 
     var moves = MoveList{};
-    rules.generateMoves(board, turn, &moves);
+    rules.generateMoves(board, turn, &moves, variant);
     if (moves.len == 0) return error.NoMoves;
 
     const d: u8 = if (depth == 0) 1 else depth;
@@ -88,7 +90,7 @@ pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Al
 /// Searches all root moves, tracks the best, and stores it in ctx.root_best.
 fn rootSearch(board: Board32, turn: Color, depth: u8, ctx: *SearchCtx) i32 {
     var moves = MoveList{};
-    rules.generateMoves(board, turn, &moves);
+    rules.generateMoves(board, turn, &moves, ctx.variant);
     var best_score: i32 = std.math.minInt(i32) + 1;
     var best_move = moves.slice()[0];
     var alpha = best_score;
@@ -118,7 +120,7 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
     var beta = beta_in;
 
     var moves = MoveList{};
-    rules.generateMoves(board, turn, &moves);
+    rules.generateMoves(board, turn, &moves, ctx.variant);
     if (moves.len == 0) return -MATE_SCORE + @as(i32, ply);
     if (depth == 0) return evaluate(board, turn);
 
@@ -222,7 +224,7 @@ test "forced capture is found" {
     var board: Board32 = [_]Piece{.empty} ** 32;
     board[board_mod.rowColToSquare(2, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
-    const result = try searchDepth(board, .white, 3, std.testing.allocator);
+    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english);
     try std.testing.expect(move_mod.isCapture(result.move));
 }
 
@@ -231,14 +233,14 @@ test "material advantage evaluates positive" {
     board[board_mod.rowColToSquare(2, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
     board[board_mod.rowColToSquare(5, 5)] = .white_pawn;
-    const result = try searchDepth(board, .white, 2, std.testing.allocator);
+    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english);
     try std.testing.expect(result.score > 0);
 }
 
 test "search is deterministic with fresh TT" {
     const board = board_mod.initialBoard();
-    const r1 = try searchDepth(board, .white, 3, std.testing.allocator);
-    const r2 = try searchDepth(board, .white, 3, std.testing.allocator);
+    const r1 = try searchDepth(board, .white, 3, std.testing.allocator, .english);
+    const r2 = try searchDepth(board, .white, 3, std.testing.allocator, .english);
     try std.testing.expectEqual(r1.move.from, r2.move.from);
     try std.testing.expectEqual(r1.move.to, r2.move.to);
     try std.testing.expectEqual(r1.score, r2.score);
@@ -246,9 +248,9 @@ test "search is deterministic with fresh TT" {
 
 test "search with 1ms time limit returns a legal move" {
     const board = board_mod.initialBoard();
-    const result = try search(board, .white, 1, std.testing.allocator);
+    const result = try search(board, .white, 1, std.testing.allocator, .english);
     var moves = MoveList{};
-    rules.generateMoves(board, .white, &moves);
+    rules.generateMoves(board, .white, &moves, .english);
     var found = false;
     for (moves.slice()) |m| {
         if (m.from == result.move.from and m.to == result.move.to) found = true;
@@ -258,10 +260,10 @@ test "search with 1ms time limit returns a legal move" {
 
 test "initial position search returns a legal move" {
     const board = board_mod.initialBoard();
-    const result = try search(board, .white, 100, std.testing.allocator);
+    const result = try search(board, .white, 100, std.testing.allocator, .english);
     try std.testing.expect(result.depth >= 1);
     var moves = MoveList{};
-    rules.generateMoves(board, .white, &moves);
+    rules.generateMoves(board, .white, &moves, .english);
     var found = false;
     for (moves.slice()) |m| {
         if (m.from == result.move.from and m.to == result.move.to) found = true;
@@ -274,15 +276,15 @@ test "deeper search finds at least as good a score" {
     board[board_mod.rowColToSquare(2, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
     board[board_mod.rowColToSquare(5, 5)] = .black_pawn;
-    const d1 = try searchDepth(board, .white, 1, std.testing.allocator);
-    const d3 = try searchDepth(board, .white, 3, std.testing.allocator);
+    const d1 = try searchDepth(board, .white, 1, std.testing.allocator, .english);
+    const d3 = try searchDepth(board, .white, 3, std.testing.allocator, .english);
     try std.testing.expect(d3.score >= d1.score);
 }
 
 test "promotion move is found when it is the only move" {
     var board: Board32 = [_]Piece{.empty} ** 32;
     board[board_mod.rowColToSquare(6, 6)] = .white_pawn;
-    const result = try searchDepth(board, .white, 2, std.testing.allocator);
+    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english);
     const rc = board_mod.squareToRowCol(result.move.to);
     try std.testing.expectEqual(@as(u8, 7), rc.row);
 }

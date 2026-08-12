@@ -48,6 +48,31 @@ test "config: parse() reads llm and minimax players" {
     try std.testing.expectEqualStrings("llama-3.3-70b-versatile", white.llm.model);
     try std.testing.expect(black == .minimax);
     try std.testing.expectEqual(@as(u32, 2000), black.minimax.time_limit_ms);
+    // No "rules" field in this config: defaults to English.
+    try std.testing.expectEqual(config_mod.Variant.english, cfg.rules);
+}
+
+test "config: rules field selects the variant, defaulting to english" {
+    const allocator = std.testing.allocator;
+    const players = "\"player_white\":{\"type\":\"human\"},\"player_black\":{\"type\":\"human\"}";
+
+    const spanish = try config_mod.parse(allocator, "{\"rules\":\"spanish\"," ++ players ++ "}");
+    try std.testing.expectEqual(config_mod.Variant.spanish, spanish.rules);
+
+    const missing = try config_mod.parse(allocator, "{" ++ players ++ "}");
+    try std.testing.expectEqual(config_mod.Variant.english, missing.rules);
+
+    const invalid = try config_mod.parse(allocator, "{\"rules\":\"frisian\"," ++ players ++ "}");
+    try std.testing.expectEqual(config_mod.Variant.english, invalid.rules);
+
+    // Non-string "rules" value: ignored, falls back to English, no error.
+    const non_string = try config_mod.parse(allocator, "{\"rules\":42," ++ players ++ "}");
+    try std.testing.expectEqual(config_mod.Variant.english, non_string.rules);
+
+    // parseVariant helper: anything but "spanish" is English.
+    try std.testing.expectEqual(config_mod.Variant.spanish, config_mod.parseVariant("spanish"));
+    try std.testing.expectEqual(config_mod.Variant.english, config_mod.parseVariant("english"));
+    try std.testing.expectEqual(config_mod.Variant.english, config_mod.parseVariant("bogus"));
 }
 
 test "config: type-mismatched fields error instead of panicking" {

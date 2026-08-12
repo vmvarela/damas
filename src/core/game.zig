@@ -10,17 +10,25 @@ pub const Piece = board_mod.Piece;
 pub const Board32 = board_mod.Board32;
 pub const Move = move_mod.Move;
 pub const MoveList = move_mod.MoveList;
+pub const Variant = rules.Variant;
 
 pub const Game = struct {
     board: Board32,
     turn: Color,
+    rules: Variant,
     allocator: std.mem.Allocator,
 
+    /// Default to English draughts (keeps existing callers unchanged).
     pub fn init(allocator: std.mem.Allocator) !*Game {
+        return initRules(allocator, .english);
+    }
+
+    pub fn initRules(allocator: std.mem.Allocator, variant: Variant) !*Game {
         const game = try allocator.create(Game);
         game.* = .{
             .board = board_mod.initialBoard(),
             .turn = .white,
+            .rules = variant,
             .allocator = allocator,
         };
         return game;
@@ -31,13 +39,13 @@ pub const Game = struct {
     }
 
     pub fn generateMoves(self: *Game, moves: *MoveList) void {
-        rules.generateMoves(self.board, self.turn, moves);
+        rules.generateMoves(self.board, self.turn, moves, self.rules);
     }
 
     /// Validate and apply a move; flips the turn. Returns false if illegal
     /// (board and turn unchanged).
     pub fn applyMove(self: *Game, move: Move) bool {
-        if (!rules.isLegalMove(self.board, self.turn, move)) return false;
+        if (!rules.isLegalMove(self.board, self.turn, move, self.rules)) return false;
         rules.applyMove(&self.board, move);
         self.turn = board_mod.opponent(self.turn);
         return true;
@@ -45,7 +53,7 @@ pub const Game = struct {
 
     /// Game over when the current turn has no moves or a side has no pieces.
     pub fn isGameOver(self: *Game) bool {
-        if (!rules.hasAnyMove(self.board, self.turn)) return true;
+        if (!rules.hasAnyMove(self.board, self.turn, self.rules)) return true;
         return !hasPieces(self.board, .white) or !hasPieces(self.board, .black);
     }
 
@@ -88,6 +96,16 @@ test "applyMove flips turn and rejects illegal moves" {
     const illegal = Move{ .from = board_mod.rowColToSquare(2, 2), .to = board_mod.rowColToSquare(3, 3), .captured = [_]u8{0} ** 12, .num_captured = 0 };
     try std.testing.expect(!game.applyMove(illegal));
     try std.testing.expectEqual(Color.black, game.turn);
+}
+
+test "initRules selects the variant" {
+    var game = try Game.initRules(std.testing.allocator, .spanish);
+    defer game.deinit();
+    try std.testing.expectEqual(Variant.spanish, game.rules);
+    var moves = MoveList{};
+    game.generateMoves(&moves);
+    // Initial position: pawns only, same 7 forward quiet moves as English.
+    try std.testing.expectEqual(@as(usize, 7), moves.len);
 }
 
 test "game over detection and winner" {

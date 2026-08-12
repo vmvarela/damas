@@ -91,18 +91,21 @@ const State = struct {
     }
 };
 
-pub fn run() !void {
+/// Run the TUI. `rules_flag` (from `--rules`) overrides the variant in
+/// config.json (and the English default when no config is present).
+pub fn run(rules_flag: ?config_mod.Variant) !void {
     const allocator = std.heap.page_allocator;
 
-    var cfg = config_mod.Config{ .player_white = .human, .player_black = .human };
+    var cfg = config_mod.Config{ .rules = .english, .player_white = .human, .player_black = .human };
     var cfg_loaded = false;
     cfg = config_mod.load(allocator, "config.json") catch |e| switch (e) {
         error.FileNotFound => cfg,
         else => |err| return err,
     };
     cfg_loaded = true;
+    if (rules_flag) |v| cfg.rules = v; // flag beats config.json
 
-    const game = try game_mod.Game.init(allocator);
+    const game = try game_mod.Game.initRules(allocator, cfg.rules);
 
     // State owns game: State.deinit() frees it. No errdefer here — a second
     // free on error return would double-free (state.deinit runs first).
@@ -299,7 +302,8 @@ fn squareAt(row: u8, col: u8) ?u8 {
 }
 
 fn newGame(state: *State) !void {
-    const g = try game_mod.Game.init(state.allocator);
+    // Preserve the current game's variant (rules don't change mid-session).
+    const g = try game_mod.Game.initRules(state.allocator, state.game.rules);
     state.game.deinit();
     state.game = g;
     state.cursor_row = 0;
@@ -312,7 +316,7 @@ fn engineMove(state: *State) !void {
     state.msg = null;
     if (state.game.isGameOver()) return;
     const time_ms = minimaxTimeForTurn(state);
-    const result = minimax.search(state.game.board, state.game.turn, time_ms, state.allocator) catch |e| switch (e) {
+    const result = minimax.search(state.game.board, state.game.turn, time_ms, state.allocator, state.game.rules) catch |e| switch (e) {
         error.NoMoves => {
             state.msg = "Sin movimientos legales";
             return;

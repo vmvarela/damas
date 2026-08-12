@@ -1,4 +1,5 @@
 {
+  "rules": "spanish",
   "player_white": { "type": "llm", "provider": "groq", "model": "llama-3.3-70b-versatile" },
   "player_black": { "type": "minimax", "time_limit_ms": 2000 }
 }

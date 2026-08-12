@@ -13,6 +13,7 @@ const server = @import("runtime/websocket/server.zig");
 const State = struct {
     board: [64]u8,
     turn: board_mod.Color,
+    rules: game_mod.Variant,
     over: bool,
     winner: ?board_mod.Color,
     last_move: ?struct { from: u8, to: u8 },
@@ -58,17 +59,70 @@ test "ws: new_game returns initial state" {
     defer game.deinit();
     var conn = server.ConnState{};
 
-    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\"}");
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\"}", .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
 
     try std.testing.expectEqualSlices(u8, &board_mod.boardToAscii(board_mod.initialBoard()), &state.value.board);
     try std.testing.expectEqual(board_mod.Color.white, state.value.turn);
+    // new_game without a "rules" field defaults to English.
+    try std.testing.expectEqual(game_mod.Variant.english, state.value.rules);
     try std.testing.expect(!state.value.over);
     try std.testing.expect(state.value.winner == null);
     try std.testing.expect(state.value.last_move == null);
     try std.testing.expect(state.value.@"error" == null);
+}
+
+test "ws: new_game honors the requested rules variant" {
+    const allocator = std.testing.allocator;
+    var game = try game_mod.Game.init(allocator);
+    defer game.deinit();
+    var conn = server.ConnState{};
+
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\",\"rules\":\"spanish\"}", .english);
+    defer allocator.free(resp);
+    var state = try parseState(allocator, resp);
+    defer state.deinit();
+
+    try std.testing.expectEqual(game_mod.Variant.spanish, state.value.rules);
+    try std.testing.expect(state.value.@"error" == null);
+
+    // Unknown variant falls back to the server's default (English here).
+    const resp2 = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\",\"rules\":\"bogus\"}", .english);
+    defer allocator.free(resp2);
+    var state2 = try parseState(allocator, resp2);
+    defer state2.deinit();
+    try std.testing.expectEqual(game_mod.Variant.english, state2.value.rules);
+}
+
+test "ws: new_game without rules uses the server default variant" {
+    const allocator = std.testing.allocator;
+    var game = try game_mod.Game.init(allocator);
+    defer game.deinit();
+    var conn = server.ConnState{};
+
+    // Server started with --rules spanish: a new_game without "rules" stays
+    // Spanish, and an invalid value also falls back to the server default.
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\"}", .spanish);
+    defer allocator.free(resp);
+    var state = try parseState(allocator, resp);
+    defer state.deinit();
+    try std.testing.expectEqual(game_mod.Variant.spanish, state.value.rules);
+    try std.testing.expect(state.value.@"error" == null);
+
+    const resp2 = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\",\"rules\":\"bogus\"}", .spanish);
+    defer allocator.free(resp2);
+    var state2 = try parseState(allocator, resp2);
+    defer state2.deinit();
+    try std.testing.expectEqual(game_mod.Variant.spanish, state2.value.rules);
+
+    // An explicit valid value still wins over the server default.
+    const resp3 = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\",\"rules\":\"english\"}", .spanish);
+    defer allocator.free(resp3);
+    var state3 = try parseState(allocator, resp3);
+    defer state3.deinit();
+    try std.testing.expectEqual(game_mod.Variant.english, state3.value.rules);
 }
 
 test "ws: make_move applies a legal move" {
@@ -83,7 +137,7 @@ test "ws: make_move applies a legal move" {
 
     const body = try std.fmt.allocPrint(allocator, "{{\"action\":\"make_move\",\"from\":{d},\"to\":{d}}}", .{ m.from, m.to });
     defer allocator.free(body);
-    const resp = try server.handleMessage(allocator, game, &conn, body);
+    const resp = try server.handleMessage(allocator, game, &conn, body, .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
@@ -107,7 +161,7 @@ test "ws: illegal make_move sets error and leaves the board unchanged" {
     defer game.deinit();
     var conn = server.ConnState{};
 
-    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"make_move\",\"from\":0,\"to\":1}");
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"make_move\",\"from\":0,\"to\":1}", .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
@@ -124,7 +178,7 @@ test "ws: compute_minimax applies the engine move" {
     defer game.deinit();
     var conn = server.ConnState{};
 
-    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"compute_minimax\",\"time_limit_ms\":1}");
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"compute_minimax\",\"time_limit_ms\":1}", .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
@@ -151,13 +205,37 @@ test "ws: compute_minimax applies the engine move" {
     try std.testing.expectEqualSlices(u8, &board_mod.boardToAscii(fresh.board), &state.value.board);
 }
 
+test "ws: compute_minimax in a spanish game keeps the variant" {
+    const allocator = std.testing.allocator;
+    var game = try game_mod.Game.init(allocator);
+    defer game.deinit();
+    var conn = server.ConnState{};
+
+    const new_resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\",\"rules\":\"spanish\"}", .english);
+    defer allocator.free(new_resp);
+    var new_state = try parseState(allocator, new_resp);
+    defer new_state.deinit();
+    try std.testing.expectEqual(game_mod.Variant.spanish, new_state.value.rules);
+
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"compute_minimax\",\"time_limit_ms\":50}", .english);
+    defer allocator.free(resp);
+    var state = try parseState(allocator, resp);
+    defer state.deinit();
+
+    try std.testing.expect(state.value.@"error" == null);
+    try std.testing.expectEqual(board_mod.Color.black, state.value.turn);
+    try std.testing.expect(state.value.last_move != null);
+    // The variant survives the engine move: still a spanish game.
+    try std.testing.expectEqual(game_mod.Variant.spanish, state.value.rules);
+}
+
 test "ws: request_llm applies the provider move" {
     const allocator = std.testing.allocator;
     var game = try game_mod.Game.init(allocator);
     defer game.deinit();
     var conn = server.ConnState{ .provider = fakeProvider() };
 
-    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"request_llm\",\"model\":\"test-model\"}");
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"request_llm\",\"model\":\"test-model\"}", .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
@@ -199,7 +277,7 @@ test "ws: malformed frames return an error, no crash" {
         "\"text\"",
         "null",
     }) |frame| {
-        const resp = try server.handleMessage(allocator, game, &conn, frame);
+        const resp = try server.handleMessage(allocator, game, &conn, frame, .english);
         defer allocator.free(resp);
         var state = try parseState(allocator, resp);
         defer state.deinit();
@@ -214,7 +292,7 @@ test "ws: unknown action returns an error" {
     defer game.deinit();
     var conn = server.ConnState{};
 
-    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"explode\"}");
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"explode\"}", .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
@@ -233,7 +311,7 @@ test "ws: request_llm without a provider returns an error response" {
     defer game.deinit();
     var conn = server.ConnState{ .build_provider = failProviderBuild };
 
-    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"request_llm\",\"model\":\"x\"}");
+    const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"request_llm\",\"model\":\"x\"}", .english);
     defer allocator.free(resp);
     var state = try parseState(allocator, resp);
     defer state.deinit();
@@ -260,7 +338,7 @@ test "ws: provider is built once and cached across requests" {
     var conn = server.ConnState{ .build_provider = countingBuild };
 
     for (0..2) |_| {
-        const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"request_llm\"}");
+        const resp = try server.handleMessage(allocator, game, &conn, "{\"action\":\"request_llm\"}", .english);
         defer allocator.free(resp);
         var state = try parseState(allocator, resp);
         defer state.deinit();

@@ -14,6 +14,8 @@ const usage =
     \\  damas-z web       servicio web (frontend embebido + WebSocket) y abre el navegador
     \\  damas-z tui       terminal UI interactiva
     \\  damas-z help      esta ayuda
+    \\  --rules english|spanish  variante de reglas (default: config.json / english;
+    \\                    en web, default del selector). Se acepta antes o despues del subcomando.
     \\
 ;
 
@@ -21,26 +23,64 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var args = std.process.Args.Iterator.init(init.args);
     _ = args.next(); // program name
 
-    if (args.next()) |sub| {
-        if (std.mem.eql(u8, sub, "web")) return web();
-        if (std.mem.eql(u8, sub, "tui")) return tui.run();
-        if (std.mem.eql(u8, sub, "help") or std.mem.eql(u8, sub, "-h") or std.mem.eql(u8, sub, "--help")) {
+    var sub: ?[]const u8 = null;
+    var rules_flag: ?config_mod.Variant = null;
+
+    while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "--rules")) {
+            const val = args.next() orelse {
+                std.debug.print("error: --rules requiere un valor (english|spanish)\n", .{});
+                std.debug.print("{s}", .{usage});
+                std.process.exit(1);
+            };
+            rules_flag = strictVariant(val) orelse {
+                std.debug.print("error: variante invalida \"{s}\" (english|spanish)\n", .{val});
+                std.debug.print("{s}", .{usage});
+                std.process.exit(1);
+            };
+            continue;
+        }
+        // Unknown flag (typo like `--runes`) must fail loudly, not be silently
+        // dropped when the subcommand is already fixed.
+        if (std.mem.startsWith(u8, a, "--")) {
+            std.debug.print("error: flag desconocido \"{s}\"\n", .{a});
+            std.debug.print("{s}", .{usage});
+            std.process.exit(1);
+        }
+        // First non-flag argument is the subcommand (help/-h/--help included).
+        if (sub == null) sub = a;
+    }
+
+    if (sub) |s| {
+        if (std.mem.eql(u8, s, "web")) return web(rules_flag);
+        if (std.mem.eql(u8, s, "tui")) return tui.run(rules_flag);
+        if (std.mem.eql(u8, s, "help") or std.mem.eql(u8, s, "-h") or std.mem.eql(u8, s, "--help")) {
             std.debug.print("{s}", .{usage});
             return;
         }
     } else {
-        return cli.runMatch(); // backward compat: bare damas-z = match
+        return cli.runMatch(rules_flag); // backward compat: bare damas-z = match
     }
 
     std.debug.print("{s}", .{usage});
     std.process.exit(1);
 }
 
-/// Web mode: port from DZ_WS_PORT, default 8080.
-fn web() !void {
+/// Strict flag parsing: anything other than "english"/"spanish" is an error
+/// (no silent fallback — unlike the config parser, which tolerates typos).
+fn strictVariant(s: []const u8) ?config_mod.Variant {
+    if (std.mem.eql(u8, s, "english")) return .english;
+    if (std.mem.eql(u8, s, "spanish")) return .spanish;
+    return null;
+}
+
+/// Web mode: port from DZ_WS_PORT, default 8080. The flag (if any) becomes
+/// the server's default variant for new games without an explicit "rules".
+fn web(rules_flag: ?config_mod.Variant) !void {
     const val = config_mod.getEnvPosix("DZ_WS_PORT") orelse "8080";
     const port = std.fmt.parseInt(u16, val, 10) catch 8080;
-    server.serveWeb(port) catch |e| {
+    const default_rules = rules_flag orelse .english;
+    server.serveWeb(port, default_rules) catch |e| {
         // Friendly bind failure: the browser open would otherwise hit a dead
         // port and the user would get a raw error + traceback.
         std.debug.print("error: no se pudo abrir 127.0.0.1:{d}: {s} (puerto en uso?)\n", .{ port, @errorName(e) });

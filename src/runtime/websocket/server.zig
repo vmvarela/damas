@@ -34,11 +34,14 @@ pub const ConnState = struct {
 };
 
 /// Handle one client frame and return the response JSON (caller owns).
+/// `default_rules` is the variant applied when a new_game request has no
+/// (or an invalid) "rules" field — set by the server's `--rules` flag.
 pub fn handleMessage(
     allocator: std.mem.Allocator,
     game: *game_mod.Game,
     conn: *ConnState,
     json: []const u8,
+    default_rules: game_mod.Variant,
 ) ![]u8 {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, json, .{
         .ignore_unknown_fields = true,
@@ -56,9 +59,16 @@ pub fn handleMessage(
         return stateJson(allocator, game, conn, "missing or invalid action");
 
     if (std.mem.eql(u8, action, "new_game")) {
+        // Optional "rules" field; a missing, non-string, or unknown value
+        // falls back to the server's default variant (the --rules flag).
+        var variant = default_rules;
+        if (root.get("rules")) |v| {
+            if (v == .string) variant = variantFromString(v.string, default_rules);
+        }
         game.* = .{
             .board = board_mod.initialBoard(),
             .turn = .white,
+            .rules = variant,
             .allocator = game.allocator,
         };
         conn.last_move = null;
@@ -87,7 +97,7 @@ pub fn handleMessage(
 
     if (std.mem.eql(u8, action, "compute_minimax")) {
         const ms = fieldU32(root, "time_limit_ms") orelse 1000;
-        const result = minimax.search(game.board, game.turn, ms, allocator) catch
+        const result = minimax.search(game.board, game.turn, ms, allocator, game.rules) catch
             return stateJson(allocator, game, conn, "search failed");
         if (!game.applyMove(result.move))
             return stateJson(allocator, game, conn, "engine produced an illegal move");
@@ -136,6 +146,9 @@ const LastMove = struct { from: u8, to: u8 };
 const StateResponse = struct {
     board: [64]u8,
     turn: board_mod.Color,
+    /// Active rule variant; std.json stringifies the enum as
+    /// "english"/"spanish" so the frontend knows which rules apply.
+    rules: game_mod.Variant,
     over: bool,
     winner: ?board_mod.Color,
     last_move: ?LastMove,
@@ -156,6 +169,7 @@ fn stateJson(
     const resp = StateResponse{
         .board = board_mod.boardToAscii(game.board),
         .turn = game.turn,
+        .rules = game.rules,
         .over = game.isGameOver(),
         .winner = game.winner(),
         .last_move = last_move,
@@ -171,6 +185,15 @@ fn stateJson(
 fn fieldString(root: std.json.ObjectMap, name: []const u8) ?[]const u8 {
     const v = root.get(name) orelse return null;
     return if (v == .string) v.string else null;
+}
+
+/// Strict "rules" parsing for new_game: unknown values fall back to the
+/// server's default variant (the --rules flag), unlike config parseVariant
+/// which always falls back to English.
+fn variantFromString(s: []const u8, default_rules: game_mod.Variant) game_mod.Variant {
+    if (std.mem.eql(u8, s, "english")) return .english;
+    if (std.mem.eql(u8, s, "spanish")) return .spanish;
+    return default_rules;
 }
 
 fn fieldU8(root: std.json.ObjectMap, name: []const u8) ?u8 {
@@ -191,7 +214,7 @@ fn fieldU32(root: std.json.ObjectMap, name: []const u8) ?u32 {
 /// ponytail: thread-per-connection, fire-and-forget; a thread pool is YAGNI
 /// until connection counts matter. std.Io.Threaded is thread-safe for
 /// blocking net ops from spawned threads.
-pub fn serve(port: u16) !void {
+pub fn serve(port: u16, default_rules: game_mod.Variant) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var addr = std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(port) };
     var server = try addr.listen(io, .{ .kernel_backlog = 16 });
@@ -199,7 +222,7 @@ pub fn serve(port: u16) !void {
     while (true) {
         // Transient accept errors (EMFILE etc.) shouldn't kill the whole server.
         const stream = server.accept(io) catch continue;
-        const t = std.Thread.spawn(.{}, handleConnection, .{ io, stream }) catch {
+        const t = std.Thread.spawn(.{}, handleConnection, .{ io, stream, default_rules }) catch {
             stream.close(io); // spawn failure: drop the connection, keep serving
             continue;
         };
@@ -209,10 +232,10 @@ pub fn serve(port: u16) !void {
 
 /// Web mode: static frontend + WebSocket on the same port, browser opened.
 /// Set DZ_NO_BROWSER=1 to skip launching a browser (CI, headless).
-pub fn serveWeb(port: u16) !void {
+pub fn serveWeb(port: u16, default_rules: game_mod.Variant) !void {
     std.debug.print("Damas Z web en http://127.0.0.1:{d} — Ctrl-C para salir\n", .{port});
     if (config_mod.getEnvPosix("DZ_NO_BROWSER") == null) openBrowser(port);
-    try serve(port);
+    try serve(port, default_rules);
 }
 
 /// Fire-and-forget `open`/`xdg-open` for the URL. Failure is non-fatal: the
@@ -252,7 +275,7 @@ fn serveStatic(writer: *std.Io.Writer, target: []const u8, method: std.http.Meth
     try writer.flush();
 }
 
-fn handleConnection(io: std.Io, stream: std.Io.net.Stream) !void {
+fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_mod.Variant) !void {
     defer stream.close(io);
     var in_buf: [65536]u8 = undefined;
     var out_buf: [65536]u8 = undefined;
@@ -269,7 +292,7 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream) !void {
             // waits for the handshake while we block in readSmallMessage
             // (deadlock — verified with a raw-socket client).
             try ws.flush();
-            serveGame(&ws) catch {};
+            serveGame(&ws, default_rules) catch {};
         },
         // Plain HTTP: serve the embedded frontend (apps/web/*) or 404 so
         // non-WebSocket clients don't hang.
@@ -279,8 +302,9 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream) !void {
     }
 }
 
-fn serveGame(ws: *std.http.Server.WebSocket) !void {
-    var game = try game_mod.Game.init(std.heap.page_allocator);
+fn serveGame(ws: *std.http.Server.WebSocket, default_rules: game_mod.Variant) !void {
+    // Default from the server's --rules flag; new_game can override.
+    var game = try game_mod.Game.initRules(std.heap.page_allocator, default_rules);
     defer game.deinit();
     var conn = ConnState{};
     defer if (conn.provider) |p| p.deinit();
@@ -295,7 +319,7 @@ fn serveGame(ws: *std.http.Server.WebSocket) !void {
             .text, .binary => {},
             else => return,
         }
-        const resp = handleMessage(std.heap.page_allocator, game, &conn, msg.data) catch {
+        const resp = handleMessage(std.heap.page_allocator, game, &conn, msg.data, default_rules) catch {
             try ws.writeMessage("{\"error\":\"server error\"}", .text);
             return;
         };

@@ -14,6 +14,22 @@ export fn dz_game_new() ?*Game {
     return Game.init(std.heap.page_allocator) catch null;
 }
 
+/// Create a game with the given rule variant: 0 = English (default), 1 =
+/// Spanish. Invalid values return null (same failure style as dz_game_new).
+export fn dz_game_new_with_rules(variant: u8) ?*Game {
+    const v: game_mod.Variant = switch (variant) {
+        0 => .english,
+        1 => .spanish,
+        else => return null,
+    };
+    return Game.initRules(std.heap.page_allocator, v) catch null;
+}
+
+/// Active rule variant of the game: 0 = English, 1 = Spanish.
+export fn dz_game_rules(game: *Game) u8 {
+    return @intFromEnum(game.rules);
+}
+
 export fn dz_game_free(game: ?*Game) void {
     if (game) |g| g.deinit();
 }
@@ -53,7 +69,7 @@ export fn dz_game_apply(game: *Game, from: u8, to: u8, captured: ?[*]const u8, n
 /// Runs the minimax engine for `time_limit_ms` and writes the best move.
 /// Returns false if the position has no legal moves.
 export fn dz_game_best_move(game: *Game, time_limit_ms: u32, out: *Move) bool {
-    const res = minimax.search(game.board, game.turn, time_limit_ms, std.heap.page_allocator) catch return false;
+    const res = minimax.search(game.board, game.turn, time_limit_ms, std.heap.page_allocator, game.rules) catch return false;
     out.* = res.move;
     return true;
 }

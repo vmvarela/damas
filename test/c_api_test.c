@@ -36,7 +36,31 @@ int main(void) {
     assert(!dz_game_over(g));
     assert(dz_game_winner(g) == -1);
 
+    /* default game is English */
+    assert(dz_game_rules(g) == DZ_RULES_ENGLISH);
+
     dz_game_free(g);
+
+    /* spanish variant: rules getter reports it, and the opening position
+       (pawns only, no captures) generates the same 7 moves and a legal
+       engine move under either variant */
+    dz_game *s = dz_game_new_with_rules(DZ_RULES_SPANISH);
+    assert(s != NULL);
+    assert(dz_game_rules(s) == DZ_RULES_SPANISH);
+
+    dz_move smoves[64];
+    size_t sn = dz_game_moves(s, smoves, 64);
+    assert(sn == 7);
+
+    dz_move sbest;
+    assert(dz_game_best_move(s, 100, &sbest));
+    assert(sbest.from != sbest.to);
+
+    dz_game_free(s);
+
+    /* invalid variant -> NULL, like a failed allocation */
+    assert(dz_game_new_with_rules(9) == NULL);
+
     printf("c_api_test: all assertions passed\n");
     return 0;
 }

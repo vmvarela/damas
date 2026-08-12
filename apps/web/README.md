@@ -1,7 +1,11 @@
 # Damas Z web client
 
-Dependency-free checkers UI.
+Dependency-free checkers UI, served by the `damas-z` binary itself (no
+python http.server needed):
 
-1. Start the server: `DZ_WS_PORT=8080 ./zig-out/bin/damas-ws`
-2. Serve this folder: `cd apps/web && python3 -m http.server 8099`
-3. Open `http://127.0.0.1:8099/index.html` (use `?port=8081` if the WebSocket server is on a different port).
+1. Start everything: `./zig-out/bin/damas-z web` (default port 8080, from
+   `DZ_WS_PORT` if set). It prints the URL and opens the browser automatically
+   (set `DZ_NO_BROWSER=1` to skip that).
+2. Play at `http://127.0.0.1:8080` — the page, styles, script, and the
+   WebSocket server all come from the one binary (use `?port=8081` in the URL
+   if the WebSocket server is on a different port).

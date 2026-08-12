@@ -5,6 +5,7 @@
 //! without sockets.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const game_mod = @import("../../core/game.zig");
 const board_mod = @import("../../core/board.zig");
 const move_mod = @import("../../core/move.zig");
@@ -13,6 +14,7 @@ const config_mod = @import("../../utils/config.zig");
 const factory = @import("../../llm/factory.zig");
 const provider_mod = @import("../../llm/provider.zig");
 const validation = @import("../../llm/validation.zig");
+const web = @import("../web_assets.zig");
 
 const DEFAULT_LLM_MODEL = "llama-3.3-70b-versatile";
 
@@ -179,10 +181,12 @@ fn fieldU32(root: std.json.ObjectMap, name: []const u8) ?u32 {
     return std.math.cast(u32, v.integer);
 }
 
-/// Blocking accept loop on loopback:port. Each connection gets a fresh game
-/// and is served serially until it closes.
-/// ponytail: single-threaded, per-connection serialized; add threads/io
-/// events when concurrency matters.
+/// Accept loop on loopback:port. Each connection gets a fresh game and is
+/// served in its own thread; a long-lived WebSocket must not starve the
+/// static HTTP serving (browsers load assets while the WS is open).
+/// ponytail: thread-per-connection, fire-and-forget; a thread pool is YAGNI
+/// until connection counts matter. std.Io.Threaded is thread-safe for
+/// blocking net ops from spawned threads.
 pub fn serve(port: u16) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var addr = std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(port) };
@@ -191,8 +195,57 @@ pub fn serve(port: u16) !void {
     while (true) {
         // Transient accept errors (EMFILE etc.) shouldn't kill the whole server.
         const stream = server.accept(io) catch continue;
-        handleConnection(io, stream) catch {};
+        const t = std.Thread.spawn(.{}, handleConnection, .{ io, stream }) catch {
+            stream.close(io); // spawn failure: drop the connection, keep serving
+            continue;
+        };
+        t.detach(); // fire-and-forget; the connection frees its own resources
     }
+}
+
+/// Web mode: static frontend + WebSocket on the same port, browser opened.
+/// Set DZ_NO_BROWSER=1 to skip launching a browser (CI, headless).
+pub fn serveWeb(port: u16) !void {
+    std.debug.print("Damas Z web en http://127.0.0.1:{d} — Ctrl-C para salir\n", .{port});
+    if (config_mod.getEnvPosix("DZ_NO_BROWSER") == null) openBrowser(port);
+    try serve(port);
+}
+
+/// Fire-and-forget `open`/`xdg-open` for the URL. Failure is non-fatal: the
+/// server still runs, the URL is printed.
+fn openBrowser(port: u16) void {
+    var url_buf: [64]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}", .{port}) catch return;
+    const launcher: []const u8 = switch (builtin.os.tag) {
+        .macos => "open",
+        .linux => "xdg-open",
+        else => return,
+    };
+    // global_single_threaded can't spawn (allocator is `.failing`), so build a
+    // local Threaded with a real allocator and the process environ.
+    var count: usize = 0;
+    while (std.c.environ[count]) |_| count += 1;
+    const env: std.process.Environ = .{ .block = .{ .slice = std.c.environ[0..count :null] } };
+    var threaded: std.Io.Threaded = .init(std.heap.page_allocator, .{ .environ = env });
+    defer threaded.deinit();
+    // ponytail: no wait() — reaping would block the accept loop; the child may
+    // linger as a zombie until the server exits. Fine.
+    _ = std.process.spawn(threaded.io(), .{ .argv = &.{ launcher, url } }) catch {
+        std.debug.print("Abriendo {s} en tu navegador\n", .{url});
+    };
+}
+
+/// Serve one embedded asset or a 404. `writer` is the raw connection writer.
+fn serveStatic(writer: *std.Io.Writer, target: []const u8, method: std.http.Method) !void {
+    const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
+    const asset = if (method == .GET) web.get(path) else null;
+    if (asset) |a| {
+        try writer.print("HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nContent-Length: {d}\r\n\r\n", .{ a.content_type, a.content.len });
+        try writer.writeAll(a.content);
+    } else {
+        try writer.writeAll("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+    }
+    try writer.flush();
 }
 
 fn handleConnection(io: std.Io, stream: std.Io.net.Stream) !void {
@@ -214,10 +267,10 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream) !void {
             try ws.flush();
             serveGame(&ws) catch {};
         },
-        // Plain HTTP: answer so non-WebSocket clients don't hang.
+        // Plain HTTP: serve the embedded frontend (apps/web/*) or 404 so
+        // non-WebSocket clients don't hang.
         else => {
-            try connection_writer.interface.writeAll("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
-            try connection_writer.interface.flush();
+            try serveStatic(&connection_writer.interface, req.head.target, req.head.method);
         },
     }
 }

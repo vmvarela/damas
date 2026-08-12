@@ -32,47 +32,23 @@ pub fn build(b: *std.Build) void {
     // ponytail: -femit-h regenerates the header from c_api.zig when the ABI
     // changes; the manual include/damas.h copy is fine for now.
 
-    // Host-only executables: the CLI reads stdin (std.posix.read) and makes
-    // LLM HTTP calls; the WS server binds a loopback socket. Neither
-    // cross-compiles, so both are skipped for non-native targets.
+    // Host-only executable: the TUI needs raw-mode stdin, the match CLI reads
+    // stdin and makes LLM HTTP calls, and the web mode binds a loopback
+    // socket and embeds apps/web/*. None of that cross-compiles, so the exe
+    // is skipped for non-native targets (the lib above stays universal).
+    // The module is rooted at the repo root (damas_z_root.zig) so the
+    // @embedFile of apps/web/* resolves within the package path — see
+    // src/runtime/web_assets.zig for why a src/-rooted module can't do that.
     if (native) {
-        // CLI: config-driven match (human/minimax/llm, SPEC §7).
-        const cli = b.addExecutable(.{
-            .name = "damas",
+        const damas_z = b.addExecutable(.{
+            .name = "damas-z",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main.zig"),
+                .root_source_file = b.path("damas_z_root.zig"),
                 .target = target,
                 .optimize = optimize,
             }),
         });
-        b.installArtifact(cli);
-
-        // Headless WebSocket server (SPEC §5); port from DZ_WS_PORT.
-        // Module rooted at src/ws_main.zig (src/), not the entry file's
-        // dir: server.zig uses relative imports (../../core/*) that only
-        // resolve inside a src/-rooted module.
-        const ws = b.addExecutable(.{
-            .name = "damas-ws",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/ws_main.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        b.installArtifact(ws);
-
-        // Terminal UI app (SPEC §2). The real code lives in apps/tui/main.zig,
-        // but Zig 0.16 requires the module root to contain all imported source
-        // files, so the executable root is the project-root anchor tui_root.zig.
-        const tui = b.addExecutable(.{
-            .name = "damas-tui",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("tui_root.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        b.installArtifact(tui);
+        b.installArtifact(damas_z);
     }
 
     const test_step = b.step("test", "Run core, C API, LLM, and WebSocket tests");

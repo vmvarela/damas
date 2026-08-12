@@ -1,19 +1,19 @@
-//! CLI: config-driven match (SPEC §7). Players come from config.json in the
-//! cwd: `human` (interactive stdin move-choice), `minimax` (engine), or `llm`
-//! (provider + validation loop). The shipped config.json is llm vs minimax;
-//! human is opt-in via a manual config edit.
+//! Match CLI (SPEC §7): players from config.json in the cwd — `human`
+//! (interactive stdin move-choice), `minimax` (engine), or `llm` (provider +
+//! validation loop). The shipped config.json is llm vs minimax; human is
+//! opt-in via a manual config edit.
 
 const std = @import("std");
-const game_mod = @import("core/game.zig");
-const move_mod = @import("core/move.zig");
-const board_mod = @import("core/board.zig");
-const minimax = @import("core/engine/minimax.zig");
-const config_mod = @import("utils/config.zig");
-const factory = @import("llm/factory.zig");
-const provider_mod = @import("llm/provider.zig");
-const validation = @import("llm/validation.zig");
+const game_mod = @import("../core/game.zig");
+const move_mod = @import("../core/move.zig");
+const board_mod = @import("../core/board.zig");
+const minimax = @import("../core/engine/minimax.zig");
+const config_mod = @import("../utils/config.zig");
+const factory = @import("../llm/factory.zig");
+const provider_mod = @import("../llm/provider.zig");
+const validation = @import("../llm/validation.zig");
 
-pub fn main() !void {
+pub fn runMatch() !void {
     const allocator = std.heap.page_allocator;
 
     // ponytail: fixed path in cwd; no argv parsing (std.os.argv was removed

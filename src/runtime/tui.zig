@@ -2,14 +2,14 @@
 //! keyboard cursor selection, engine/LLM helpers, and raw-mode input.
 
 const std = @import("std");
-const game_mod = @import("../../src/core/game.zig");
-const move_mod = @import("../../src/core/move.zig");
-const board_mod = @import("../../src/core/board.zig");
-const minimax = @import("../../src/core/engine/minimax.zig");
-const config_mod = @import("../../src/utils/config.zig");
-const factory = @import("../../src/llm/factory.zig");
-const provider_mod = @import("../../src/llm/provider.zig");
-const validation = @import("../../src/llm/validation.zig");
+const game_mod = @import("../core/game.zig");
+const move_mod = @import("../core/move.zig");
+const board_mod = @import("../core/board.zig");
+const minimax = @import("../core/engine/minimax.zig");
+const config_mod = @import("../utils/config.zig");
+const factory = @import("../llm/factory.zig");
+const provider_mod = @import("../llm/provider.zig");
+const validation = @import("../llm/validation.zig");
 
 const Color = game_mod.Color;
 const Piece = game_mod.Piece;
@@ -91,7 +91,7 @@ const State = struct {
     }
 };
 
-pub fn main() !void {
+pub fn run() !void {
     const allocator = std.heap.page_allocator;
 
     var cfg = config_mod.Config{ .player_white = .human, .player_black = .human };

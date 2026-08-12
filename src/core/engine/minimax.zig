@@ -22,7 +22,6 @@ pub const TranspositionTable = tt_mod.TranspositionTable;
 pub const TTFlag = tt_mod.TTFlag;
 pub const Timer = timer_mod.Timer;
 
-const DEFAULT_SEED: u64 = 0x9E3779B97F4A7C15;
 const MAX_DEPTH: u8 = 24;
 const MATE_SCORE: i32 = 100_000;
 const PAWN_VALUE: i32 = 100;
@@ -47,7 +46,6 @@ const SearchCtx = struct {
 /// the deepest completed iteration. Deterministic for a given position and
 /// time limit (fixed Zobrist seed, fresh TT per call).
 pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.mem.Allocator) !SearchResult {
-    zobrist.init(DEFAULT_SEED);
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
     var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(time_limit_ms) };
@@ -74,7 +72,6 @@ pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.me
 
 /// Fixed-depth search (no time limit). Depth 0 is clamped to 1.
 pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Allocator) !SearchResult {
-    zobrist.init(DEFAULT_SEED);
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
     var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(0) };

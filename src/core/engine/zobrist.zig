@@ -1,10 +1,11 @@
 //! Zobrist hashing for board positions.
 //!
-//! `init(seed)` fills a [32][5]u64 table (32 squares x 5 piece types) plus a
-//! turn hash using a seeded PRNG — deterministic, so tests and search are
-//! reproducible. `hash` XORs the piece entries plus the turn hash when it is
-//! black's turn. `hashMove` updates a hash incrementally for the search hot
-//! path.
+//! The [32][5]u64 table plus the turn hash are generated at comptime from a
+//! fixed seed — deterministic (tests and search are reproducible) and
+//! immutable, so concurrent searches from multiple threads (web mode) never
+//! race on shared state. `hash` XORs the piece entries plus the turn hash
+//! when it is black's turn. `hashMove` updates a hash incrementally for the
+//! search hot path.
 
 const std = @import("std");
 const board_mod = @import("../board.zig");
@@ -16,20 +17,25 @@ pub const Piece = board_mod.Piece;
 pub const Board32 = board_mod.Board32;
 pub const Move = move_mod.Move;
 
-var table: [32][5]u64 = undefined;
-var turn_hash: u64 = 0;
+const SEED: u64 = 0x9E3779B97F4A7C15;
 
-/// Fill the hash tables from a seeded PRNG. Must be called before hash().
-pub fn init(seed: u64) void {
-    var prng = std.Random.DefaultPrng.init(seed);
+/// Comptime-generated from the fixed seed; identical to the old runtime
+/// `init(SEED)` output, so search results don't change. One PRNG stream:
+/// the table consumes 160 ints, then turn_hash is the 161st.
+const generated = blk: {
+    @setEvalBranchQuota(100_000); // Xoshiro256 comptime fill exceeds the default 1000
+    var prng = std.Random.DefaultPrng.init(SEED);
     const rand = prng.random();
+    var t: [32][5]u64 = undefined;
     for (0..32) |sq| {
         for (0..5) |pt| {
-            table[sq][pt] = rand.int(u64);
+            t[sq][pt] = rand.int(u64);
         }
     }
-    turn_hash = rand.int(u64);
-}
+    break :blk .{ .table = t, .turn_hash = rand.int(u64) };
+};
+const table: [32][5]u64 = generated.table;
+const turn_hash: u64 = generated.turn_hash;
 
 /// Hash of a position: XOR of piece entries plus the turn hash if black.
 pub fn hash(board: Board32, turn: Color) u64 {
@@ -62,17 +68,13 @@ pub fn hashMove(h: u64, board: Board32, move: Move) u64 {
     return nh ^ turn_hash;
 }
 
-test "hash is deterministic for same seed" {
-    zobrist_init(42);
+test "hash is deterministic" {
     const board = board_mod.initialBoard();
     const h1 = hash(board, .white);
-    try std.testing.expectEqual(h1, hash(board, .white));
-    zobrist_init(42);
     try std.testing.expectEqual(h1, hash(board, .white));
 }
 
 test "different positions hash differently" {
-    zobrist_init(42);
     const b1 = board_mod.initialBoard();
     var b2 = b1;
     b2[board_mod.rowColToSquare(2, 0)] = .empty; // remove a white pawn
@@ -82,8 +84,6 @@ test "different positions hash differently" {
 }
 
 test "hashMove matches hash after applyMove" {
-    zobrist_init(42);
-
     // Quiet move.
     const board = board_mod.initialBoard();
     const quiet = Move{ .from = board_mod.rowColToSquare(2, 0), .to = board_mod.rowColToSquare(3, 1), .captured = [_]u8{0} ** 12, .num_captured = 0 };
@@ -111,6 +111,3 @@ test "hashMove matches hash after applyMove" {
     rules.applyMove(&b3_after, prom);
     try std.testing.expectEqual(hash(b3_after, .black), h3_inc);
 }
-
-// Test-only alias so the test block reads naturally.
-const zobrist_init = init;

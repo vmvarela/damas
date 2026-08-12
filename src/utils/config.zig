@@ -43,6 +43,7 @@ pub fn parse(allocator: std.mem.Allocator, json: []const u8) !Config {
         .ignore_unknown_fields = true,
     });
     defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidConfig;
     const root = parsed.value.object;
 
     const white = try parsePlayer(allocator, root.get("player_white") orelse return error.InvalidConfig);
@@ -64,16 +65,24 @@ pub fn freePlayerStrings(allocator: std.mem.Allocator, p: PlayerConfig) void {
 }
 
 fn parsePlayer(allocator: std.mem.Allocator, value: std.json.Value) !PlayerConfig {
+    if (value != .object) return error.InvalidConfig;
     const obj = value.object;
-    const tag = (obj.get("type") orelse return error.InvalidConfig).string;
+    const type_val = obj.get("type") orelse return error.InvalidConfig;
+    if (type_val != .string) return error.InvalidConfig;
+    const tag = type_val.string;
     if (std.mem.eql(u8, tag, "llm")) {
-        const provider_str = try allocator.dupe(u8, (obj.get("provider") orelse return error.InvalidConfig).string);
+        const provider_val = obj.get("provider") orelse return error.InvalidConfig;
+        const model_val = obj.get("model") orelse return error.InvalidConfig;
+        if (provider_val != .string or model_val != .string) return error.InvalidConfig;
+        const provider_str = try allocator.dupe(u8, provider_val.string);
         errdefer allocator.free(provider_str);
-        const model = try allocator.dupe(u8, (obj.get("model") orelse return error.InvalidConfig).string);
+        const model = try allocator.dupe(u8, model_val.string);
         return .{ .llm = .{ .provider = provider_str, .model = model } };
     }
     if (std.mem.eql(u8, tag, "minimax")) {
-        const ms = (obj.get("time_limit_ms") orelse return error.InvalidConfig).integer;
+        const ms_val = obj.get("time_limit_ms") orelse return error.InvalidConfig;
+        if (ms_val != .integer) return error.InvalidConfig;
+        const ms = ms_val.integer;
         return .{ .minimax = .{ .time_limit_ms = std.math.cast(u32, ms) orelse return error.InvalidConfig } };
     }
     if (std.mem.eql(u8, tag, "human")) {

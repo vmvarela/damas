@@ -194,6 +194,10 @@ test "ws: malformed frames return an error, no crash" {
         "not json",
         "{\"action\":42}",
         "{}",
+        "123",
+        "[]",
+        "\"text\"",
+        "null",
     }) |frame| {
         const resp = try server.handleMessage(allocator, game, &conn, frame);
         defer allocator.free(resp);

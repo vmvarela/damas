@@ -24,7 +24,9 @@ pub const TranspositionTable = struct {
     /// `size` must be a power of two.
     pub fn init(allocator: std.mem.Allocator, size: usize) !TranspositionTable {
         const entries = try allocator.alloc(TTEntry, size);
-        @memset(entries, undefined);
+        // Zeroed entries: key 0 doubles as the empty marker. Undefined
+        // memory would let garbage keys alias real hashes (bogus scores).
+        @memset(entries, std.mem.zeroes(TTEntry));
         return .{ .entries = entries, .allocator = allocator };
     }
 
@@ -34,6 +36,7 @@ pub const TranspositionTable = struct {
 
     /// Entry for `key`, or null if absent (or overwritten by a collision).
     pub fn get(self: *const TranspositionTable, key: u64) ?TTEntry {
+        if (key == 0) return null; // 0 is the empty marker
         // u64 key must shrink to usize on 32-bit targets (wasm32) for the
         // slice index; the mask keeps it within bounds either way.
         const idx = @as(usize, @intCast(key)) & (self.entries.len - 1);

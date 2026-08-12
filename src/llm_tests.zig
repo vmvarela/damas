@@ -50,6 +50,19 @@ test "config: parse() reads llm and minimax players" {
     try std.testing.expectEqual(@as(u32, 2000), black.minimax.time_limit_ms);
 }
 
+test "config: type-mismatched fields error instead of panicking" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{
+        "[1,2]",
+        "\"str\"",
+        "{\"player_white\":{\"type\":5},\"player_black\":{\"type\":\"human\"}}",
+        "{\"player_white\":{\"type\":\"llm\",\"provider\":3,\"model\":\"m\"},\"player_black\":{\"type\":\"human\"}}",
+        "{\"player_white\":{\"type\":\"minimax\",\"time_limit_ms\":\"fast\"},\"player_black\":{\"type\":\"human\"}}",
+    }) |bad| {
+        try std.testing.expectError(error.InvalidConfig, config_mod.parse(allocator, bad));
+    }
+}
+
 test "config: apiKey missing variable errors" {
     try std.testing.expectError(
         error.MissingApiKey,

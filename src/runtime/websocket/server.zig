@@ -47,6 +47,10 @@ pub fn handleMessage(
     };
     defer parsed.deinit();
 
+    // Valid JSON that isn't an object (e.g. `123`, `[]`, `"x"`) must not hit
+    // the union field access below — that would panic and kill the server.
+    if (parsed.value != .object)
+        return stateJson(allocator, game, conn, "expected JSON object");
     const root = parsed.value.object;
     const action = fieldString(root, "action") orelse
         return stateJson(allocator, game, conn, "missing or invalid action");

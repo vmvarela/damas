@@ -1,2 +1,5 @@
+.slim/deepwork/
 .slim/deepwork/.zig-cache/
+.zig-cache/
+.envrc
 zig-out/

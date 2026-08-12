@@ -34,13 +34,17 @@ pub const TranspositionTable = struct {
 
     /// Entry for `key`, or null if absent (or overwritten by a collision).
     pub fn get(self: *const TranspositionTable, key: u64) ?TTEntry {
-        const e = self.entries[key & (self.entries.len - 1)];
+        // u64 key must shrink to usize on 32-bit targets (wasm32) for the
+        // slice index; the mask keeps it within bounds either way.
+        const idx = @as(usize, @intCast(key)) & (self.entries.len - 1);
+        const e = self.entries[idx];
         if (e.key == key) return e;
         return null;
     }
 
     pub fn put(self: *TranspositionTable, entry: TTEntry) void {
-        self.entries[entry.key & (self.entries.len - 1)] = entry;
+        const idx = @as(usize, @intCast(entry.key)) & (self.entries.len - 1);
+        self.entries[idx] = entry;
     }
 
     pub fn clear(self: *TranspositionTable) void {

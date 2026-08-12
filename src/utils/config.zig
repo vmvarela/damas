@@ -51,7 +51,9 @@ pub fn parse(allocator: std.mem.Allocator, json: []const u8) !Config {
     return .{ .player_white = white, .player_black = black };
 }
 
-fn freePlayerStrings(allocator: std.mem.Allocator, p: PlayerConfig) void {
+/// Free the strings owned by a parsed PlayerConfig (llm branch). No-op for
+/// minimax/human. Shared with main.zig's CLI cleanup.
+pub fn freePlayerStrings(allocator: std.mem.Allocator, p: PlayerConfig) void {
     switch (p) {
         .llm => |l| {
             allocator.free(l.provider);
@@ -80,18 +82,28 @@ fn parsePlayer(allocator: std.mem.Allocator, value: std.json.Value) !PlayerConfi
     return error.InvalidConfig;
 }
 
+/// Environment variable as a borrowed slice into the process environment.
+/// Null if unset. Unavailable on Windows (Environ.getPosix is POSIX-only);
+/// use `apiKey` there.
+pub fn getEnvPosix(name: []const u8) ?[]const u8 {
+    if (builtin.os.tag == .windows) return null;
+    var count: usize = 0;
+    while (std.c.environ[count]) |_| count += 1;
+    const env: std.process.Environ = .{ .block = .{ .slice = std.c.environ[0..count :null] } };
+    return std.process.Environ.getPosix(env, name);
+}
+
 /// Read an API key from the environment; error.MissingApiKey if unset.
 /// Caller owns the returned memory.
 pub fn apiKey(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
-    const env: std.process.Environ = if (builtin.os.tag == .windows)
-        .{ .block = .global }
-    else blk: {
-        var count: usize = 0;
-        while (std.c.environ[count]) |_| count += 1;
-        break :blk .{ .block = .{ .slice = std.c.environ[0..count :null] } };
-    };
-    return env.getAlloc(allocator, name) catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return error.MissingApiKey,
-        else => |e| return e,
-    };
+    if (builtin.os.tag == .windows) {
+        // PEB path: no C `environ` symbol needed.
+        const env: std.process.Environ = .{ .block = .global };
+        return env.getAlloc(allocator, name) catch |err| switch (err) {
+            error.EnvironmentVariableMissing => return error.MissingApiKey,
+            else => |e| return e,
+        };
+    }
+    const val = getEnvPosix(name) orelse return error.MissingApiKey;
+    return allocator.dupe(u8, val);
 }

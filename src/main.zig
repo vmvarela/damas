@@ -25,10 +25,15 @@ pub fn main() !void {
         },
         else => |err| return err,
     };
-    defer freeConfigStrings(allocator, cfg);
+    defer {
+        config_mod.freePlayerStrings(allocator, cfg.player_white);
+        config_mod.freePlayerStrings(allocator, cfg.player_black);
+    }
 
     // LLM provider is built once per match (factory dups key/model into its
     // state) and freed at exit.
+    // ponytail: first model wins — llm player cache keyed once per match; config
+    // with two llm players of different models keeps white's provider.
     var llm: ?provider_mod.LlmProvider = null;
     defer if (llm) |p| p.deinit();
 
@@ -106,31 +111,17 @@ fn playLlm(
     }
     var moves = move_mod.MoveList{};
     game.generateMoves(&moves);
-    const resp = try validation.requestValidMove(allocator, llm.*.?, game.board, moves.slice());
+    const resp = validation.requestValidMove(allocator, llm.*.?, game.board, moves.slice()) catch |e| {
+        std.debug.print("LLM failed: {s} — match aborted\n", .{@errorName(e)});
+        std.process.exit(1);
+    };
     defer allocator.free(resp.reasoning);
-    const f = board_mod.squareToRowCol(resp.from);
-    const t = board_mod.squareToRowCol(resp.to);
+    const f = board_mod.squareToRowCol(resp.move.from);
+    const t = board_mod.squareToRowCol(resp.move.to);
     std.debug.print("LLM ({s}): {d},{d} -> {d},{d}", .{ cfg.model, f.row, f.col, t.row, t.col });
     if (resp.reasoning.len > 0) std.debug.print(" — reasoning: {s}", .{resp.reasoning});
     std.debug.print("\n", .{});
     _ = game.applyMove(resp.move);
-}
-
-fn freeConfigStrings(allocator: std.mem.Allocator, cfg: config_mod.Config) void {
-    switch (cfg.player_white) {
-        .llm => |l| {
-            allocator.free(l.provider);
-            allocator.free(l.model);
-        },
-        else => {},
-    }
-    switch (cfg.player_black) {
-        .llm => |l| {
-            allocator.free(l.provider);
-            allocator.free(l.model);
-        },
-        else => {},
-    }
 }
 
 fn printBoard(board: board_mod.Board32) void {

@@ -69,8 +69,6 @@ fn fakeRequestMove(ctx: *anyopaque, allocator: std.mem.Allocator, req: provider.
     const resp = self.responses[self.calls];
     self.calls += 1;
     return .{
-        .from = resp.from,
-        .to = resp.to,
         .reasoning = try allocator.dupe(u8, resp.reasoning),
         .move = resp.move,
     };
@@ -85,14 +83,14 @@ const fake_vtable = provider.LlmProvider.VTable{
     .deinit = fakeDeinit,
 };
 
-/// A canned LLM reply: from/to plus a zero captured set.
-fn fakeResp(from: u8, to: u8, reasoning: []const u8) provider.Response {
-    return .{
-        .from = from,
-        .to = to,
-        .reasoning = reasoning,
-        .move = .{ .from = from, .to = to, .captured = [_]u8{0} ** 12, .num_captured = 0 },
-    };
+/// A canned LLM reply carrying the chosen move.
+fn fakeResp(m: move_mod.Move, reasoning: []const u8) provider.Response {
+    return .{ .reasoning = reasoning, .move = m };
+}
+
+/// A move that is not in any legal list used by these tests.
+fn noMove(from: u8, to: u8) move_mod.Move {
+    return .{ .from = from, .to = to, .captured = [_]u8{0} ** 12, .num_captured = 0 };
 }
 
 fn initialLegalMoves(allocator: std.mem.Allocator) !struct { board: board_mod.Board32, list: move_mod.MoveList } {
@@ -109,14 +107,13 @@ test "validation: valid move accepted on first try" {
     const moves = pos.list.slice();
     const first = moves[0];
 
-    var ctx = FakeCtx{ .responses = &.{ fakeResp(first.from, first.to, "looks good") } };
+    var ctx = FakeCtx{ .responses = &.{ fakeResp(first, "looks good") } };
     const prov = provider.LlmProvider{ .ctx = &ctx, .vtable = &fake_vtable };
 
     const resp = try validation.requestValidMove(allocator, prov, pos.board, moves);
     defer allocator.free(resp.reasoning);
-    try std.testing.expectEqual(first.from, resp.from);
-    try std.testing.expectEqual(first.to, resp.to);
     try std.testing.expectEqual(first.from, resp.move.from);
+    try std.testing.expectEqual(first.to, resp.move.to);
     try std.testing.expectEqual(first.num_captured, resp.move.num_captured);
     try std.testing.expectEqualSlices(u8, &first.captured, &resp.move.captured);
     try std.testing.expectEqual(@as(usize, 1), ctx.calls);
@@ -129,15 +126,15 @@ test "validation: invalid move is retried" {
     const first = moves[0];
 
     var ctx = FakeCtx{ .responses = &.{
-        fakeResp(0, 1, "oops"),
-        fakeResp(first.from, first.to, "fixed"),
+        fakeResp(noMove(0, 1), "oops"),
+        fakeResp(first, "fixed"),
     } };
     const prov = provider.LlmProvider{ .ctx = &ctx, .vtable = &fake_vtable };
 
     const resp = try validation.requestValidMove(allocator, prov, pos.board, moves);
     defer allocator.free(resp.reasoning);
-    try std.testing.expectEqual(first.from, resp.from);
-    try std.testing.expectEqual(first.to, resp.to);
+    try std.testing.expectEqual(first.from, resp.move.from);
+    try std.testing.expectEqual(first.to, resp.move.to);
     try std.testing.expectEqual(@as(usize, 2), ctx.calls);
 }
 
@@ -146,9 +143,9 @@ test "validation: three invalid moves -> InvalidMove" {
     const pos = try initialLegalMoves(allocator);
 
     var ctx = FakeCtx{ .responses = &.{
-        fakeResp(0, 1, "a"),
-        fakeResp(2, 3, "b"),
-        fakeResp(4, 5, "c"),
+        fakeResp(noMove(0, 1), "a"),
+        fakeResp(noMove(2, 3), "b"),
+        fakeResp(noMove(4, 5), "c"),
     } };
     const prov = provider.LlmProvider{ .ctx = &ctx, .vtable = &fake_vtable };
 
@@ -159,22 +156,23 @@ test "validation: three invalid moves -> InvalidMove" {
     try std.testing.expectEqual(@as(usize, 3), ctx.calls);
 }
 
-test "validation: matched move carries its captured set" {
+test "validation: provider's resolved move is returned unchanged" {
     const allocator = std.testing.allocator;
     const board = board_mod.initialBoard();
-    // Two capture chains sharing the same from/to: the first match wins and
-    // its captured set must survive validation.
+    // Two capture chains sharing the same from/to. The model's number is
+    // authoritative: the fake resolves to m2, and validation must NOT
+    // replace it with the first from/to match (m1).
     const m1 = move_mod.Move{ .from = 9, .to = 18, .captured = [_]u8{13, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, .num_captured = 2 };
     const m2 = move_mod.Move{ .from = 9, .to = 18, .captured = [_]u8{0} ** 12, .num_captured = 0 };
     const legal = [_]move_mod.Move{ m1, m2 };
 
-    var ctx = FakeCtx{ .responses = &.{ fakeResp(9, 18, "double jump") } };
+    var ctx = FakeCtx{ .responses = &.{ fakeResp(m2, "number 1, the quiet one") } };
     const prov = provider.LlmProvider{ .ctx = &ctx, .vtable = &fake_vtable };
 
     const resp = try validation.requestValidMove(allocator, prov, board, &legal);
     defer allocator.free(resp.reasoning);
-    try std.testing.expectEqual(@as(u8, 2), resp.move.num_captured);
-    try std.testing.expectEqualSlices(u8, &m1.captured, &resp.move.captured);
+    try std.testing.expectEqual(@as(u8, 0), resp.move.num_captured);
+    try std.testing.expectEqualSlices(u8, &m2.captured, &resp.move.captured);
 }
 
 test "prompt builder: board, move list, and number-based reply instruction" {
@@ -217,8 +215,8 @@ test "openai.parseChatResponse: valid move numbers" {
     ;
     const r0 = try openai.parseChatResponse(allocator, body0, &test_moves);
     defer allocator.free(r0.reasoning);
-    try std.testing.expectEqual(test_moves[0].from, r0.from);
-    try std.testing.expectEqual(test_moves[0].to, r0.to);
+    try std.testing.expectEqual(test_moves[0].from, r0.move.from);
+    try std.testing.expectEqual(test_moves[0].to, r0.move.to);
     try std.testing.expectEqual(test_moves[0].num_captured, r0.move.num_captured);
     try std.testing.expectEqualSlices(u8, &test_moves[0].captured, &r0.move.captured);
     try std.testing.expectEqualStrings("advance", r0.reasoning);
@@ -228,8 +226,8 @@ test "openai.parseChatResponse: valid move numbers" {
     ;
     const r2 = try openai.parseChatResponse(allocator, body2, &test_moves);
     defer allocator.free(r2.reasoning);
-    try std.testing.expectEqual(test_moves[2].from, r2.from);
-    try std.testing.expectEqual(test_moves[2].to, r2.to);
+    try std.testing.expectEqual(test_moves[2].from, r2.move.from);
+    try std.testing.expectEqual(test_moves[2].to, r2.move.to);
 }
 
 test "openai.parseChatResponse: malformed bodies -> InvalidLlmResponse" {
@@ -267,8 +265,8 @@ test "ollama.parseGenerateResponse: valid move numbers" {
     ;
     const r0 = try ollama.parseGenerateResponse(allocator, body0, &test_moves);
     defer allocator.free(r0.reasoning);
-    try std.testing.expectEqual(test_moves[0].from, r0.from);
-    try std.testing.expectEqual(test_moves[0].to, r0.to);
+    try std.testing.expectEqual(test_moves[0].from, r0.move.from);
+    try std.testing.expectEqual(test_moves[0].to, r0.move.to);
     try std.testing.expectEqual(test_moves[0].num_captured, r0.move.num_captured);
     try std.testing.expectEqualSlices(u8, &test_moves[0].captured, &r0.move.captured);
     try std.testing.expectEqualStrings("ok", r0.reasoning);
@@ -278,8 +276,8 @@ test "ollama.parseGenerateResponse: valid move numbers" {
     ;
     const r2 = try ollama.parseGenerateResponse(allocator, body2, &test_moves);
     defer allocator.free(r2.reasoning);
-    try std.testing.expectEqual(test_moves[2].from, r2.from);
-    try std.testing.expectEqual(test_moves[2].to, r2.to);
+    try std.testing.expectEqual(test_moves[2].from, r2.move.from);
+    try std.testing.expectEqual(test_moves[2].to, r2.move.to);
 }
 
 test "ollama.parseGenerateResponse: malformed bodies -> InvalidLlmResponse" {

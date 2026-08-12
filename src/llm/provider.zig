@@ -13,13 +13,10 @@ pub const Request = struct {
     note: []const u8 = "",
 };
 
-/// A chosen move. `reasoning` is allocated with the request allocator and
-/// owned by the caller (may be empty). `move` is a best-effort from/to pair
-/// from the LLM; the validation loop replaces it with the matched legal move
-/// (which carries the authoritative captured set).
+/// A chosen move. `move` is the authoritative entry from `legal_moves`
+/// (resolved by list number; captured set included). `reasoning` is allocated
+/// with the request allocator and owned by the caller (may be empty).
 pub const Response = struct {
-    from: u8,
-    to: u8,
     reasoning: []const u8,
     move: Move,
 };
@@ -87,8 +84,6 @@ pub fn parseMoveJson(allocator: std.mem.Allocator, content: []const u8, legal_mo
     if (idx >= legal_moves.len) return error.InvalidLlmResponse;
     const m = legal_moves[@intCast(idx)];
     return .{
-        .from = m.from,
-        .to = m.to,
         .reasoning = try allocator.dupe(u8, inner.value.reasoning),
         .move = m,
     };

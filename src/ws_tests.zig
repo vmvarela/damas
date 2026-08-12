@@ -31,8 +31,6 @@ fn fakeRequestMove(ctx: *anyopaque, allocator: std.mem.Allocator, req: provider.
     _ = ctx;
     const m = req.legal_moves[0];
     return .{
-        .from = m.from,
-        .to = m.to,
         .reasoning = try allocator.dupe(u8, "fake move"),
         .move = m,
     };

@@ -11,8 +11,8 @@ pub const Response = provider.Response;
 pub const Move = provider.Move;
 
 /// Ask the provider for a move, validating it against `legal_moves`.
-/// On success `response.move` is the matched legal move (carrying its
-/// captured set; two capture chains may share the same from/to).
+/// On success `response.move` is the provider's resolved move (already an
+/// authoritative entry from `legal_moves`; this loop only checks it).
 /// Returns error.InvalidMove after 3 failed attempts. The returned
 /// `Response.reasoning` is caller-owned.
 pub fn requestValidMove(
@@ -25,7 +25,7 @@ pub fn requestValidMove(
     var note: []const u8 = "";
 
     for (0..3) |_| {
-        var resp = prov.request_move(allocator, .{
+        const resp = prov.request_move(allocator, .{
             .board_ascii = ascii[0..],
             .legal_moves = legal_moves,
             .note = note,
@@ -36,22 +36,20 @@ pub fn requestValidMove(
             },
             else => |e| return e,
         };
-        if (findMatch(resp, legal_moves)) |m| {
-            // Authoritative move: the provider resolved the list number, so
-            // `move` already matches; keep the guard for misbehaving fakes.
-            resp.move = m.*;
-            return resp;
-        }
+        // Pure check: the model's number is authoritative — parseMoveJson
+        // already resolved it against legal_moves, so never overwrite
+        // resp.move (two capture chains may share from/to).
+        if (findMatch(resp, legal_moves)) return resp;
         allocator.free(resp.reasoning);
         note = "Your previous move number is not in the legal list. Reply with one number from the legal moves list.";
     }
     return error.InvalidMove;
 }
 
-/// First legal move with the same from/to as the reply, or null.
-fn findMatch(resp: Response, legal_moves: []const Move) ?*const Move {
-    for (legal_moves) |*m| {
-        if (m.from == resp.from and m.to == resp.to) return m;
+/// True if the reply's move is in `legal_moves` (from/to match).
+fn findMatch(resp: Response, legal_moves: []const Move) bool {
+    for (legal_moves) |m| {
+        if (m.from == resp.move.from and m.to == resp.move.to) return true;
     }
-    return null;
+    return false;
 }

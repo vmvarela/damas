@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const server = @import("server.zig");
+const config_mod = @import("../../utils/config.zig");
 
 pub fn main() !void {
     const port = getPort();
@@ -11,12 +12,9 @@ pub fn main() !void {
 }
 
 /// DZ_WS_PORT env override; 8080 when unset or not a valid u16.
-/// ponytail: std.process.getEnvVar was removed in this build; reuse the
-/// std.c.environ scan from utils/config.zig (getPosix avoids allocating).
+/// ponytail: std.process.getEnvVar was removed in this build; getEnvPosix
+/// avoids allocating (shared with config.zig's apiKey).
 fn getPort() u16 {
-    var count: usize = 0;
-    while (std.c.environ[count]) |_| count += 1;
-    const env: std.process.Environ = .{ .block = .{ .slice = std.c.environ[0..count :null] } };
-    const val = std.process.Environ.getPosix(env, "DZ_WS_PORT") orelse return 8080;
+    const val = config_mod.getEnvPosix("DZ_WS_PORT") orelse return 8080;
     return std.fmt.parseInt(u16, val, 10) catch 8080;
 }

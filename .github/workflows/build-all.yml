@@ -1,0 +1,54 @@
+name: Build all targets
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  cross-compile:
+    name: Cross-compile ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-musl
+          - aarch64-linux-musl
+          - arm-linux-musleabihf
+          - riscv64-linux-musl
+          - x86-linux-musl
+          - x86_64-macos
+          - aarch64-macos
+          - x86_64-windows-gnu
+          - aarch64-windows-gnu
+          - x86-windows-gnu
+          - x86_64-freebsd
+          - aarch64-freebsd
+          - x86_64-netbsd
+          - aarch64-netbsd
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Zig (pin 0.16.0 release)
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/zig
+          key: zig-cache-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-cache-${{ matrix.target }}-
+
+      # Compile only (no run) — catches cross-target breakage in PRs before
+      # it surfaces in release builds.
+      - name: Cross-compile
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe

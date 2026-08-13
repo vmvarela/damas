@@ -1,7 +1,9 @@
 .slim/deepwork/
 .slim/deepwork/.zig-cache/
 .zig-cache/
+zig-pkg/
 .envrc
 zig-out/
+.opencode/
 
 .playwright-mcp/

@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Zig (pin 0.16.0 release)
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/zig' || '~/.cache/zig' }}
+          key: zig-cache-${{ matrix.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-cache-${{ matrix.os }}-
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe
+
+      # `zig build test` alone does NOT compile the exe (tui.zig), so both
+      # steps are required.
+      - name: Unit & integration tests
+        run: zig build test
+
+      - name: Build WASM web bundle
+        run: zig build web -Doptimize=ReleaseSafe
+
+      - name: CLI smoke (minimax vs minimax)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tmp=$(mktemp -d)
+          cat > "$tmp/config.json" <<'EOF'
+          {
+            "rules": "english",
+            "player_white": { "type": "minimax", "time_limit_ms": 1 },
+            "player_black": { "type": "minimax", "time_limit_ms": 1 }
+          }
+          EOF
+          cd "$tmp"
+          # No draw detection in the engine: bound the match (timeout on Linux,
+          # perl alarm on macOS — `timeout` doesn't exist there).
+          if command -v timeout > /dev/null 2>&1; then
+            timeout 120 "$GITHUB_WORKSPACE/zig-out/bin/damas" < /dev/null > /tmp/dz-out.txt 2>&1 || true
+          else
+            perl -e 'alarm shift; exec @ARGV' 120 "$GITHUB_WORKSPACE/zig-out/bin/damas" < /dev/null > /tmp/dz-out.txt 2>&1 || true
+          fi
+          if ! grep -q "Game over" /tmp/dz-out.txt; then
+            echo "FAIL: expected 'Game over' in output:"; cat /tmp/dz-out.txt; exit 1
+          fi
+          echo "PASS: match completed"
+          rm -rf "$tmp"
+
+      - name: Web smoke (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          DZ_NO_BROWSER=1 DZ_WS_PORT=8123 "$GITHUB_WORKSPACE/zig-out/bin/damas" web &
+          pid=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8123/ > /dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/index.html)
+          wasm_code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/damas.wasm)
+          echo "index: $code, damas.wasm: $wasm_code (404 expected: server serves only 3 assets)"
+          if [ "$code" != "200" ]; then echo "FAIL: index not served"; kill $pid; exit 1; fi
+          if [ "$wasm_code" != "404" ]; then echo "FAIL: expected 404 for damas.wasm"; kill $pid; exit 1; fi
+          kill $pid 2>/dev/null || true
+          echo "PASS: web serves assets, wasm-mode detection deterministic"
+
+      - name: WASM bundle smoke
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd zig-out/web
+          python3 -m http.server 8124 > /dev/null 2>&1 &
+          pid=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8124/damas.wasm -o /tmp/dz.wasm > /dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          size=$(wc -c < /tmp/dz.wasm)
+          if [ "$size" -lt 10000 ]; then echo "FAIL: damas.wasm too small ($size)"; kill $pid; exit 1; fi
+          kill $pid 2>/dev/null || true
+          echo "PASS: damas.wasm served ($size bytes)"
+
+      - name: TUI smoke (tmux, ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y tmux > /dev/null 2>&1
+          tmux new-session -d -x 120 -y 40 -s dz "$GITHUB_WORKSPACE/zig-out/bin/damas" tui
+          sleep 3
+          tmux capture-pane -p -t dz > /tmp/dz-tui.txt
+          if ! grep -q "Damas" /tmp/dz-tui.txt && ! grep -q "Rules:" /tmp/dz-tui.txt; then
+            echo "FAIL: TUI did not render:"; cat /tmp/dz-tui.txt; tmux kill-session -t dz; exit 1
+          fi
+          tmux send-keys -t dz q
+          sleep 1
+          tmux kill-session -t dz 2>/dev/null || true
+          echo "PASS: TUI rendered"
+
+      - name: TUI smoke (macos, bounded)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if command -v tmux > /dev/null; then
+            tmux new-session -d -x 120 -y 40 -s dz "$GITHUB_WORKSPACE/zig-out/bin/damas" tui
+            sleep 3
+            tmux capture-pane -p -t dz > /tmp/dz-tui.txt
+            if ! grep -q "Damas" /tmp/dz-tui.txt && ! grep -q "Rules:" /tmp/dz-tui.txt; then
+              echo "FAIL: TUI did not render:"; cat /tmp/dz-tui.txt; tmux kill-session -t dz; exit 1
+            fi
+            tmux kill-session -t dz 2>/dev/null || true
+            echo "PASS: TUI rendered (tmux)"
+          else
+            # no tmux: bounded pty run (perl alarm — `timeout` isn't on macOS),
+            # with explicit pty geometry (vaxis needs a non-zero term size).
+            perl -e 'alarm shift; exec @ARGV' 5 script -q /tmp/dz-tui.txt sh -c 'stty rows 40 cols 120; exec "$GITHUB_WORKSPACE/zig-out/bin/damas" tui' > /dev/null 2>&1 || true
+            if ! grep -q "Damas" /tmp/dz-tui.txt && ! grep -q "Rules:" /tmp/dz-tui.txt; then
+              echo "FAIL: TUI did not render:"; cat /tmp/dz-tui.txt; exit 1
+            fi
+            echo "PASS: TUI rendered (script, bounded)"
+          fi
+
+      - name: CLI smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = .\zig-out\bin\damas.exe --version
+          if ($LASTEXITCODE -ne 0) { Write-Error "FAIL: --version"; exit 1 }
+          Write-Host "version: $v"
+          .\zig-out\bin\damas.exe help | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Error "FAIL: help"; exit 1 }
+          Write-Host "PASS"

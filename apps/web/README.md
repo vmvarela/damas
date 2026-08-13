@@ -1,4 +1,4 @@
-# Damas Z web client
+# Damas web client
 
 Dependency-free checkers UI, served by the `damas` binary itself (no
 python http.server needed):

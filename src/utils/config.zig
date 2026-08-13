@@ -108,15 +108,29 @@ fn parsePlayer(allocator: std.mem.Allocator, value: std.json.Value) !PlayerConfi
     return error.InvalidConfig;
 }
 
+/// Process environment captured once at main() from `init.environ_map` /
+/// `init.minimal.environ`. libc-free: `std.c.environ` breaks musl
+/// cross-compiles (no libc linked). Null in tests (env reads return null).
+var g_env_map: ?*const std.process.Environ.Map = null;
+var g_environ: ?std.process.Environ = null;
+
+/// Called from main() before any env read or spawn.
+pub fn setProcessEnv(map: *const std.process.Environ.Map, environ: std.process.Environ) void {
+    g_env_map = map;
+    g_environ = environ;
+}
+
 /// Environment variable as a borrowed slice into the process environment.
-/// Null if unset. Unavailable on Windows (Environ.getPosix is POSIX-only);
-/// use `apiKey` there.
+/// Null if unset. Cross-platform via the Environ.Map captured at main().
 pub fn getEnvPosix(name: []const u8) ?[]const u8 {
-    if (builtin.os.tag == .windows) return null;
-    var count: usize = 0;
-    while (std.c.environ[count]) |_| count += 1;
-    const env: std.process.Environ = .{ .block = .{ .slice = std.c.environ[0..count :null] } };
-    return std.process.Environ.getPosix(env, name);
+    const map = g_env_map orelse return null;
+    return map.get(name);
+}
+
+/// Process environ value (for spawning children with the parent's env).
+/// Null if main() hasn't called setProcessEnv yet.
+pub fn processEnviron() ?std.process.Environ {
+    return g_environ;
 }
 
 /// Read an API key from the environment; error.MissingApiKey if unset.

@@ -1,0 +1,54 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+# Allow only one concurrent deployment, skipping runs queued between the run
+# in-progress and the latest queued. Cancels in-progress runs in the same
+# concurrency group.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build WASM web bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Zig (pin 0.16.0 release)
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Build web
+        run: zig build web -Doptimize=ReleaseSafe
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # zig-out/web holds damas.wasm + index.html + style.css + app.js
+          path: zig-out/web
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

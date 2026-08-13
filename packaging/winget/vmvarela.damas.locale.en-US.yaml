@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+# WinGet default locale manifest template for damas.
+# __VERSION__ is replaced at build time by the CI workflow.
+
+PackageIdentifier: vmvarela.damas
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: vmvarela
+PackageName: damas
+PackageUrl: https://github.com/vmvarela/damas
+License: MIT
+ShortDescription: "Checkers game: CLI, TUI and embedded web server in one binary"
+Description: "damas is a checkers engine and game in a single binary — interactive CLI match, terminal UI, and an embedded web server with a standalone WASM build for static hosting."
+Moniker: damas
+Tags:
+  - checkers
+  - game
+  - cli
+  - tui
+  - engine
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

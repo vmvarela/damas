@@ -7,6 +7,7 @@ const cli = @import("runtime/cli.zig");
 const tui = @import("runtime/tui.zig");
 const server = @import("runtime/websocket/server.zig");
 const config_mod = @import("utils/config.zig");
+const build_options = @import("build_options");
 
 const usage =
     \\damas — damas (checkers) engine
@@ -19,8 +20,15 @@ const usage =
     \\
 ;
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    var args = std.process.Args.Iterator.init(init.args);
+pub fn main(init: std.process.Init) !void {
+    // Capture the process environment once (libc-free: std.c.environ breaks
+    // musl cross-compiles). All env reads + spawns go through config.zig.
+    config_mod.setProcessEnv(init.environ_map, init.minimal.environ);
+    // initAllocator: cross-platform (Windows needs an allocator for the
+    // command line; on posix it's the same as init). deinit is a no-op on
+    // posix.
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, std.heap.page_allocator);
+    defer args.deinit();
     _ = args.next(); // program name
 
     var sub: ?[]const u8 = null;
@@ -40,6 +48,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
             };
             continue;
         }
+        if (std.mem.eql(u8, a, "--version")) {
+            std.debug.print("damas {s}\n", .{build_options.version});
+            return;
+        }
         // Unknown flag (typo like `--runes`) must fail loudly, not be silently
         // dropped when the subcommand is already fixed.
         if (std.mem.startsWith(u8, a, "--")) {
@@ -53,7 +65,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     if (sub) |s| {
         if (std.mem.eql(u8, s, "web")) return web(rules_flag);
-        if (std.mem.eql(u8, s, "tui")) return tui.run(rules_flag);
+        if (std.mem.eql(u8, s, "tui")) return tui.run(init.io, init.environ_map, rules_flag);
         if (std.mem.eql(u8, s, "help") or std.mem.eql(u8, s, "-h") or std.mem.eql(u8, s, "--help")) {
             std.debug.print("{s}", .{usage});
             return;

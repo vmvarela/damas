@@ -26,6 +26,8 @@
   const rulesSelect = document.getElementById('rules');
 
   let ws = null;
+  let wasm = null;
+  let wasmMode = false;
   let reconnectTimer = null;
   let selectedSq = null;
   let busy = false;
@@ -66,7 +68,7 @@
     busyEl.hidden = !v;
     boardEl.setAttribute('aria-busy', v ? 'true' : 'false');
     btnEngine.disabled = v;
-    btnLlm.disabled = v;
+    btnLlm.disabled = v || wasmMode;
     btnNew.disabled = v;
     rulesSelect.disabled = v;
   }
@@ -83,7 +85,7 @@
     }
 
     ws.addEventListener('open', () => {
-      setConnection('connected', 'connected');
+      setConnection('connected', 'servidor');
       moveHistory = [];
       selectedSq = null;
       setStatus('Reconnected — game reset.');
@@ -125,6 +127,11 @@
   }
 
   function send(payload) {
+    if (wasmMode) return sendWasm(payload);
+    return sendWs(payload);
+  }
+
+  function sendWs(payload) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       setBusy(false);
       lastAction = null;
@@ -133,6 +140,121 @@
     }
     ws.send(JSON.stringify(payload));
     return true;
+  }
+
+  // WASM transport: synchronous request/response against the standalone
+  // damas.wasm artifact — same JSON wire format as the WebSocket server.
+  // ABI: dz_req_ptr()/dz_req_cap() expose a request buffer, dz_handle(len)
+  // returns the response JSON packed as ptr<<32|len, valid until the next call.
+  function sendWasm(payload) {
+    if (!wasm) {
+      setBusy(false);
+      lastAction = null;
+      setStatus('Engine not loaded. Refresh.', true);
+      return false;
+    }
+    const json = JSON.stringify(payload);
+    const bytes = new TextEncoder().encode(json);
+    if (bytes.length > wasm.dz_req_cap()) {
+      setBusy(false);
+      lastAction = null;
+      setStatus('Request too large for WASM buffer', true);
+      return false;
+    }
+    const ptr = wasm.dz_req_ptr();
+    new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+    const packed = wasm.dz_handle(bytes.length);
+    if (packed === 0n) {
+      // dz_handle returns 0 on buffer overflow or allocation failure; the
+      // game may have advanced before the OOM, so this is honest either way.
+      setBusy(false);
+      lastAction = null;
+      setStatus('Engine error (memoria)', true);
+      return false;
+    }
+    const respPtr = Number((packed >> 32n) & 0xffffffffn);
+    const respLen = Number(packed & 0xffffffffn);
+    let msg;
+    try {
+      msg = JSON.parse(
+        new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, respPtr, respLen))
+      );
+    } catch (e) {
+      setBusy(false);
+      lastAction = null;
+      setStatus('Malformed WASM response', true);
+      return false;
+    }
+    handleState(msg);
+    return true;
+  }
+
+  // Mode detection: HEAD on damas.wasm — the `damas web` server serves only
+  // its 3 assets, so a 404 deterministically means WebSocket mode. Query
+  // overrides: ?wasm forces WASM, ?server forces WebSocket.
+  async function detectMode() {
+    const params = new URLSearchParams(location.search);
+    if (params.has('wasm')) return 'wasm';
+    if (params.has('server')) return 'ws';
+    try {
+      const res = await fetch('damas.wasm', { method: 'HEAD' });
+      return res.ok ? 'wasm' : 'ws';
+    } catch (e) {
+      return 'ws'; // file:// or offline — fall back to the server transport
+    }
+  }
+
+  async function initWasm() {
+    wasmMode = true;
+    setLlmUnavailable();
+    setConnection('connected', 'local (wasm)');
+    setStatus('Loading engine…');
+    try {
+      const imports = { env: { dz_now_ms: () => performance.now() } };
+      let mod;
+      try {
+        mod = await WebAssembly.instantiateStreaming(fetch('damas.wasm'), imports);
+      } catch (e) {
+        // Some static servers serve .wasm with the wrong MIME type — fall back.
+        const buf = await (await fetch('damas.wasm')).arrayBuffer();
+        mod = await WebAssembly.instantiate(buf, imports);
+      }
+      wasm = mod.instance.exports;
+      // Variant enum: english = 0, spanish = 1.
+      wasm.dz_init(rulesSelect.value === 'spanish' ? 1 : 0);
+      moveHistory = [];
+      selectedSq = null;
+      setStatus('Engine loaded.');
+      send({ action: 'new_game' });
+    } catch (e) {
+      if (new URLSearchParams(location.search).has('wasm')) {
+        // Explicit ?wasm override: surface the failure, don't fall back.
+        setStatus('Failed to load damas.wasm: ' + e.message, true);
+        setConnection('', 'wasm failed');
+      } else {
+        // Unforced failure: degrade to the WebSocket transport instead of
+        // leaving the UI dead until refresh.
+        setStatus('WASM engine unavailable (' + e.message + ') — connecting to server.', true);
+        wasmMode = false;
+        connect();
+      }
+    }
+  }
+
+  // LLM needs a backend API key — unavailable in standalone WASM mode.
+  function setLlmUnavailable() {
+    btnLlm.disabled = true;
+    modelInput.disabled = true;
+    btnLlm.title = 'LLM no disponible en versión web';
+    modelInput.title = 'LLM no disponible en versión web';
+    let note = document.getElementById('llm-note');
+    if (!note) {
+      note = document.createElement('span');
+      note.id = 'llm-note';
+      note.style.cssText = 'font-size:0.75rem;color:var(--term-dim);flex:1 1 100%;';
+      document.querySelector('.llm-row').appendChild(note);
+    }
+    note.textContent = 'LLM no disponible en versión web';
   }
 
   function pieceClass(ch) {
@@ -355,7 +477,9 @@
     if (wasHumanMove && autoToggle.checked && !state.over) {
       setBusy(true);
       lastAction = 'compute_minimax';
-      send({ action: 'compute_minimax', time_limit_ms: 1000 });
+      // wasm dz_handle is synchronous on the main thread — keep it short so
+      // the busy spinner still paints.
+      send({ action: 'compute_minimax', time_limit_ms: wasmMode ? 250 : 1000 });
     }
   }
 
@@ -370,7 +494,7 @@
   btnEngine.addEventListener('click', () => {
     if (!state || state.over || busy) return;
     setBusy(true);
-    send({ action: 'compute_minimax', time_limit_ms: 1000 });
+    send({ action: 'compute_minimax', time_limit_ms: wasmMode ? 250 : 1000 });
   });
 
   btnLlm.addEventListener('click', () => {
@@ -404,5 +528,8 @@
     }
   });
 
-  connect();
+  detectMode().then((mode) => {
+    if (mode === 'wasm') initWasm();
+    else connect();
+  });
 })();

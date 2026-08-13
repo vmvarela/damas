@@ -1,7 +1,10 @@
-//! Terminal UI for damas (SPEC §2). Full-screen ANSI checkers board with
-//! keyboard cursor selection, engine/LLM helpers, and raw-mode input.
+//! Terminal UI for damas (SPEC §2). Full-screen checkers board rendered via
+//! libvaxis (cell buffer + truecolor styles), keyboard cursor selection,
+//! engine/LLM helpers. Terminal state (raw mode, alt screen, resize events,
+//! key parsing) is owned by vaxis; this file keeps the game logic and layout.
 
 const std = @import("std");
+const vaxis = @import("vaxis");
 const game_mod = @import("../core/game.zig");
 const move_mod = @import("../core/move.zig");
 const board_mod = @import("../core/board.zig");
@@ -15,39 +18,32 @@ const Color = game_mod.Color;
 const Piece = game_mod.Piece;
 const Move = game_mod.Move;
 
-const esc = "\x1b[";
-const clear = esc ++ "2J" ++ esc ++ "H";
-const hide_cursor = esc ++ "?25l";
-const show_cursor = esc ++ "?25h";
-const alt_on = esc ++ "?1049h";
-const alt_off = esc ++ "?1049l";
-const reset = esc ++ "0m";
+const VColor = vaxis.Color;
+const VStyle = vaxis.Style;
 
 // True-color palette matching the web UI: dark board, bright green pieces
 // and accents. White = solid bright-green discs, black = near-black discs
 // ringed in bright green (same as the web's filled vs outlined circles).
-const bg_dark = esc ++ "48;2;14;33;17m"; // #0e2111 playable square
-const bg_light = esc ++ "48;2;18;43;22m"; // #122b16 non-playable square
-const bg_selected = esc ++ "48;2;45;105;55m"; // selected square
-const bg_target = esc ++ "48;2;28;72;36m"; // legal target
-const bg_cursor = esc ++ "48;2;40;60;44m"; // cursor
-const fg_piece_white = esc ++ "38;2;0;255;59;1m"; // #00ff3b solid white pieces
-const fg_piece_black = esc ++ "38;2;0;255;59m"; // #00ff3b black pieces' outline
-const fg_fill_black = esc ++ "38;2;15;35;18m"; // #0f2312 black pieces' fill
-const fg_status = esc ++ "38;2;0;255;59m"; // #00ff3b accent text
-const fg_idx = esc ++ "38;2;0;179;71m"; // #00b347 square numbers
-const fg_dark = esc ++ "38;2;8;18;10m"; // near-black king markers on white discs
-const bg_disc_white = esc ++ "48;2;0;255;59m"; // white disc fill
-const bg_disc_black = esc ++ "48;2;15;35;18m"; // black disc fill
-const fg_grid = esc ++ "38;2;7;23;11m"; // #07170b subtle grid lines
+const bg_dark = VColor{ .rgb = .{ 14, 33, 17 } }; // #0e2111 playable square
+const bg_light = VColor{ .rgb = .{ 18, 43, 22 } }; // #122b16 non-playable square
+const bg_selected = VColor{ .rgb = .{ 45, 105, 55 } }; // selected square
+const bg_target = VColor{ .rgb = .{ 28, 72, 36 } }; // legal target
+const bg_cursor = VColor{ .rgb = .{ 40, 60, 44 } }; // cursor
+const fg_piece = VColor{ .rgb = .{ 0, 255, 59 } }; // #00ff3b discs and accents
+const fg_fill_black = VColor{ .rgb = .{ 15, 35, 18 } }; // #0f2312 black fill
+const fg_status = VColor{ .rgb = .{ 0, 255, 59 } }; // accent text
+const fg_idx = VColor{ .rgb = .{ 0, 179, 71 } }; // #00b347 square numbers
+const fg_dark = VColor{ .rgb = .{ 8, 18, 10 } }; // near-black king markers
+const bg_disc_white = VColor{ .rgb = .{ 0, 255, 59 } }; // white disc fill
+const bg_disc_black = VColor{ .rgb = .{ 15, 35, 18 } }; // black disc fill
 
-const Input = union(enum) {
-    arrow: Dir,
-    enter,
-    esc,
-    key: u8,
+const Dir = enum { up, down, left, right };
 
-    const Dir = enum { up, down, left, right };
+/// Events vaxis delivers to the main loop. Keyboard-only (the TUI never used
+/// the mouse) plus the mandatory winsize for resize handling.
+const Event = union(enum) {
+    key_press: vaxis.Key,
+    winsize: vaxis.Winsize,
 };
 
 const State = struct {
@@ -56,9 +52,6 @@ const State = struct {
     cfg_loaded: bool,
     game: *game_mod.Game,
     llm: ?provider_mod.LlmProvider,
-    raw_mode: bool,
-    orig_termios: ?std.posix.termios,
-    raw_termios: ?std.posix.termios,
 
     cursor_row: u8,
     cursor_col: u8,
@@ -68,9 +61,6 @@ const State = struct {
     /// Applied moves, oldest first; rendered with standard 1-32 notation.
     history: move_mod.MoveList,
     msg: ?[]const u8,
-    /// Key swallowed by the ESC probe (pressed right after Esc); replayed
-    /// on the next readInput so Esc doesn't eat it (Esc+q must still quit).
-    pending: ?u8,
 
     fn init(allocator: std.mem.Allocator, cfg: config_mod.Config, loaded: bool, game: *game_mod.Game) State {
         return .{
@@ -79,9 +69,6 @@ const State = struct {
             .cfg_loaded = loaded,
             .game = game,
             .llm = null,
-            .raw_mode = false,
-            .orig_termios = null,
-            .raw_termios = null,
             .cursor_row = 0,
             .cursor_col = 0,
             .selected = null,
@@ -89,7 +76,6 @@ const State = struct {
             .last_move = null,
             .history = .{},
             .msg = null,
-            .pending = null,
         };
     }
 
@@ -105,7 +91,7 @@ const State = struct {
 
 /// Run the TUI. `rules_flag` (from `--rules`) overrides the variant in
 /// config.json (and the English default when no config is present).
-pub fn run(rules_flag: ?config_mod.Variant) !void {
+pub fn run(io: std.Io, env_map: *std.process.Environ.Map, rules_flag: ?config_mod.Variant) !void {
     const allocator = std.heap.page_allocator;
 
     var cfg = config_mod.Config{ .rules = .english, .player_white = .human, .player_black = .human };
@@ -122,120 +108,70 @@ pub fn run(rules_flag: ?config_mod.Variant) !void {
     // State owns game: State.deinit() frees it. No errdefer here — a second
     // free on error return would double-free (state.deinit runs first).
     var state = State.init(allocator, cfg, cfg_loaded, game);
-    defer restoreTerminal(&state);
     defer state.deinit();
 
-    try enterRawMode(&state);
-    std.debug.print("{s}{s}{s}", .{ alt_on, hide_cursor, clear });
+    var buffer: [1024]u8 = undefined;
+    var tty = try vaxis.Tty.init(io, &buffer);
+    defer tty.deinit();
+
+    var vx = try vaxis.init(io, allocator, env_map, .{});
+    defer vx.deinit(allocator, tty.writer());
+
+    var loop: vaxis.Loop(Event) = .init(io, &tty, &vx);
+    try loop.start();
+    defer loop.stop();
+    // SIGWINCH fallback for terminals without in-band resize; the loop also
+    // posts an initial winsize on start, so the first frame is always sized.
+    try loop.installResizeHandler();
+    defer loop.uninstallResizeHandler();
+
+    try vx.enterAltScreen(tty.writer());
+    try vx.queryTerminal(tty.writer(), .fromSeconds(1));
 
     while (true) {
-        draw(&state);
-        const input = readInput(&state) catch |e| switch (e) {
-            error.Eof => break,
-            else => |err| return err,
-        };
-        switch (input) {
-            .key => |k| switch (k) {
-                // `return` (not break): break here would only exit the inner
-                // switch and the loop would spin forever in a pty (no EOF).
-                3, 'q', 'Q' => return, // Ctrl-C or q quits cleanly
-                'n', 'N' => try newGame(&state),
-                'm', 'M' => try engineMove(&state),
-                'l', 'L' => try llmMove(&state),
-                'h', 'H' => state.msg = "Help: arrows+Enter selects/moves, Esc cancels",
-                else => {},
+        const event = try loop.nextEvent();
+        switch (event) {
+            .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
+            .key_press => |key| {
+                if (try handleKey(&state, key)) break;
             },
-            .arrow => |d| moveCursor(&state, d),
-            .enter => try handleEnter(&state),
-            .esc => clearSelection(&state),
         }
+        draw(&state, &vx);
+        try vx.render(tty.writer());
     }
 }
 
-fn enterRawMode(state: *State) !void {
-    const orig = std.posix.tcgetattr(0) catch |e| switch (e) {
-        error.NotATerminal => return, // non-tty: run without raw mode
-        else => |err| return err,
-    };
-    var raw = orig;
-    raw.lflag.ECHO = false;
-    raw.lflag.ICANON = false;
-    raw.lflag.ISIG = false; // keep Ctrl-C in-band so defer restores terminal
-    raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-    try std.posix.tcsetattr(0, .FLUSH, raw);
-    // SIGTERM / kill -9 unhandled by design; only in-band Ctrl-C is caught.
-    state.raw_mode = true;
-    state.orig_termios = orig;
-    state.raw_termios = raw;
-}
-
-fn restoreTerminal(state: *State) void {
-    std.debug.print("{s}{s}", .{ show_cursor, alt_off });
-    if (state.raw_mode) {
-        if (state.orig_termios) |t| {
-            std.posix.tcsetattr(0, .FLUSH, t) catch {};
-        }
+/// Map a vaxis key event to an action — same bindings as the pre-vaxis TUI:
+/// arrows move the cursor, Enter selects/moves, Esc cancels, n/m/l/h/q act.
+/// Returns true when the user quits.
+fn handleKey(state: *State, key: vaxis.Key) !bool {
+    if (key.matches('q', .{}) or key.matches('Q', .{})) return true;
+    if (key.matches('c', .{ .ctrl = true })) return true; // Ctrl-C quits cleanly
+    if (key.matches('n', .{}) or key.matches('N', .{})) {
+        try newGame(state);
+    } else if (key.matches('m', .{}) or key.matches('M', .{})) {
+        try engineMove(state);
+    } else if (key.matches('l', .{}) or key.matches('L', .{})) {
+        try llmMove(state);
+    } else if (key.matches('h', .{}) or key.matches('H', .{})) {
+        state.msg = "Help: arrows+Enter selects/moves, Esc cancels";
+    } else if (key.matches(vaxis.Key.enter, .{})) {
+        try handleEnter(state);
+    } else if (key.matches(vaxis.Key.escape, .{})) {
+        clearSelection(state);
+    } else if (key.matches(vaxis.Key.up, .{})) {
+        moveCursor(state, .up);
+    } else if (key.matches(vaxis.Key.down, .{})) {
+        moveCursor(state, .down);
+    } else if (key.matches(vaxis.Key.left, .{})) {
+        moveCursor(state, .left);
+    } else if (key.matches(vaxis.Key.right, .{})) {
+        moveCursor(state, .right);
     }
+    return false;
 }
 
-fn readInput(state: *State) !Input {
-    // Replay a key the ESC probe swallowed (pressed right after Esc).
-    if (state.pending) |p| {
-        state.pending = null;
-        return byteInput(p);
-    }
-    var buf: [1]u8 = undefined;
-    const n = try std.posix.read(0, &buf);
-    if (n == 0) return error.Eof;
-    const c = buf[0];
-    if (c == '\r' or c == '\n') return .enter;
-    if (c == 3) return .{ .key = 3 }; // Ctrl-C handled in main loop
-    if (c == 27) { // ESC
-        if (!state.raw_mode) return .esc;
-        var tmp = state.raw_termios.?;
-        tmp.cc[@intFromEnum(std.posix.V.MIN)] = 0;
-        tmp.cc[@intFromEnum(std.posix.V.TIME)] = 1;
-        std.posix.tcsetattr(0, .NOW, tmp) catch {};
-        defer {
-            var restore = state.raw_termios.?;
-            restore.cc[@intFromEnum(std.posix.V.MIN)] = 1;
-            restore.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-            std.posix.tcsetattr(0, .NOW, restore) catch {};
-        }
-        var seq: [2]u8 = undefined;
-        var got: usize = 0;
-        while (got < seq.len) {
-            const nr = std.posix.read(0, seq[got..]) catch break;
-            if (nr == 0) break;
-            got += nr;
-        }
-        if (got >= 2 and seq[0] == '[') {
-            return switch (seq[1]) {
-                'A' => .{ .arrow = .up },
-                'B' => .{ .arrow = .down },
-                'C' => .{ .arrow = .right },
-                'D' => .{ .arrow = .left },
-                else => .esc,
-            };
-        }
-        // Esc followed by a plain key within the probe window: don't eat it —
-        // replay on the next readInput (Esc+q still quits).
-        if (got == 1 and seq[0] != '[') state.pending = seq[0];
-        return .esc;
-    }
-    return .{ .key = c };
-}
-
-/// Map a raw byte to an Input (used for direct reads and ESC-probe replays).
-fn byteInput(c: u8) Input {
-    if (c == '\r' or c == '\n') return .enter;
-    if (c == 3) return .{ .key = 3 };
-    if (c == 27) return .esc; // a replayed lone Esc
-    return .{ .key = c };
-}
-
-fn moveCursor(state: *State, d: Input.Dir) void {
+fn moveCursor(state: *State, d: Dir) void {
     state.msg = null;
     switch (d) {
         .up => state.cursor_row = if (state.cursor_row == 0) 7 else state.cursor_row - 1,
@@ -409,84 +345,6 @@ fn appendFmt(buf: []u8, len: usize, comptime fmt: []const u8, args: anytype) usi
     return len + s.len;
 }
 
-/// Store one rendered line in the screen buffer.
-fn putLine(screen: *[200][2048]u8, lens: *[200]usize, ln: *usize, comptime fmt: []const u8, args: anytype) void {
-    if (ln.* >= screen.len) return;
-    const s = std.fmt.bufPrint(&screen[ln.*], fmt, args) catch &[_]u8{};
-    lens[ln.*] = s.len;
-    ln.* += 1;
-}
-
-/// Append `n` spaces to a buffer, returning the new length.
-fn appendSpaces(buf: []u8, len: usize, n: usize) usize {
-    var l = len;
-    for (0..n) |_| l = appendFmt(buf, l, " ", .{});
-    return l;
-}
-
-/// Append the standard square number (2 digits) centered in a cell-width
-/// field.
-fn appendCellNumber(buf: []u8, len: usize, num: u8, c: usize) usize {
-    var l = len;
-    const pad = (c -| 2) / 2;
-    l = appendSpaces(buf, l, pad);
-    l = appendFmt(buf, l, "{d:>2}", .{num});
-    l = appendSpaces(buf, l, c - 2 - pad);
-    return l;
-}
-
-/// Append one content line of a cell holding a piece: a disc (3 lines tall)
-/// with the number above it when the cell is tall enough, or a bare glyph
-/// Append one content line of a cell holding a piece: a full-width circle
-/// built from half/full blocks (▄/█/▀) — solid for white, a green ring over
-/// a dark fill for black. The standard number sits dim in the top-left
-/// corner of the cell, and the king marker is overlaid on the middle row.
-/// `cw` x `ch` is the cell interior, `cl` the current content line.
-fn appendPiece(buf: []u8, len: usize, cw: usize, ch: usize, cl: usize, num: u8, king_glyph: []const u8, king_fg: []const u8, outline: []const u8, fill: []const u8, fill_bg: []const u8) usize {
-    var l = len;
-    const d = cw; // the disc fills the full cell width
-    if (d < 3) {
-        // Too narrow for a circle: a plain block bar.
-        l = appendFmt(buf, l, "{s}", .{outline});
-        for (0..d) |_| l = appendFmt(buf, l, "{s}", .{"█"});
-        return l;
-    }
-    if (cl == 0) {
-        // Top bulge; the square number sits in the left corner.
-        if (d >= 4) {
-            l = appendFmt(buf, l, "{s}{d:>2}{s}", .{ fg_idx, num, outline });
-            for (0..d - 3) |_| l = appendFmt(buf, l, "{s}", .{"▄"});
-            l = appendFmt(buf, l, " ", .{});
-        } else {
-            l = appendFmt(buf, l, "{s} ", .{outline});
-            for (0..d - 2) |_| l = appendFmt(buf, l, "{s}", .{"▄"});
-            l = appendFmt(buf, l, " ", .{});
-        }
-        return l;
-    }
-    if (cl == ch - 1) {
-        // Bottom bulge of the circle.
-        l = appendFmt(buf, l, "{s} ", .{outline});
-        for (0..d - 2) |_| l = appendFmt(buf, l, "{s}", .{"▀"});
-        l = appendFmt(buf, l, " ", .{});
-        return l;
-    }
-    // Middle rows: outline edges, fill interior, king marker at the center.
-    const king_at = (d - 1) / 2;
-    l = appendFmt(buf, l, "{s}█{s}", .{ outline, fill }); // left edge + fill color
-    var i: usize = 1;
-    while (i < d - 1) : (i += 1) {
-        if (king_glyph.len > 0 and i == king_at) {
-            l = appendFmt(buf, l, "{s}{s}{s}{s}", .{ king_fg, fill_bg, king_glyph, reset });
-            l = appendFmt(buf, l, "{s}", .{fill}); // resume fill after the king cell
-        } else {
-            l = appendFmt(buf, l, "█", .{});
-        }
-    }
-    l = appendFmt(buf, l, "{s}█", .{outline}); // right edge
-    return l;
-}
-
 /// Standard 1-32 notation number for a square (same mapping as the web UI,
 /// verified against the 1981 Tinsley–Long record: 9-14 23-18 14x23 27x18).
 /// The English standard puts black on 1-12; the TUI shows white at top
@@ -497,16 +355,6 @@ fn stdNum(sq: u8, rules: game_mod.Variant) u8 {
         .spanish => sq + 1,
         .english => (7 - sq / 4) * 4 + (sq % 4) + 1,
     };
-}
-
-const TermSize = struct { rows: u16, cols: u16 };
-
-/// Terminal size via TIOCGWINSZ; null when not a tty (fall back to 24x80).
-fn termSize() ?TermSize {
-    var ws: std.posix.winsize = .{ .row = 0, .col = 0, .xpixel = 0, .ypixel = 0 };
-    const rc = std.posix.system.ioctl(0, @intCast(std.posix.T.IOCGWINSZ), @intFromPtr(&ws));
-    if (rc < 0 or ws.row == 0 or ws.col == 0) return null;
-    return .{ .rows = ws.row, .cols = ws.col };
 }
 
 /// "from-to" for quiet moves, "fromxto" for captures, in standard numbers.
@@ -527,21 +375,129 @@ fn pushHistory(state: *State, move: Move) void {
     _ = state.history.add(move);
 }
 
+/// One rendered line: writes cells into a vaxis window at a fixed row,
+/// tracking the current column. Text goes through printSegment so multi-byte
+/// graphemes (♔, —) are measured and written correctly.
+const Line = struct {
+    win: vaxis.Window,
+    y: u16,
+    x: u16 = 0,
+
+    fn write(self: *Line, s: []const u8, style: VStyle) void {
+        const r = self.win.printSegment(.{ .text = s, .style = style }, .{
+            .row_offset = self.y,
+            .col_offset = self.x,
+            .wrap = .none,
+        });
+        self.x = r.col;
+    }
+
+    fn spaces(self: *Line, n: usize, style: VStyle) void {
+        for (0..n) |_| {
+            self.win.writeCell(self.x, self.y, .{
+                .char = .{ .grapheme = " ", .width = 1 },
+                .style = style,
+            });
+            self.x += 1;
+        }
+    }
+};
+
+/// Write a 2-digit right-aligned number (1-32) using static digit slices —
+/// no per-frame buffer, so the cells' grapheme pointers stay valid until the
+/// frame is rendered (vaxis stores the slice, not a copy).
+fn writeNum(line: *Line, num: u8, style: VStyle) void {
+    if (num < 10) {
+        line.write(" ", style);
+        line.write("0123456789"[num..num + 1], style);
+    } else {
+        line.write("0123456789"[num / 10 .. num / 10 + 1], style);
+        line.write("0123456789"[num % 10 .. num % 10 + 1], style);
+    }
+}
+
+/// Standard square number (2 digits) centered in a cell-width field.
+fn drawCellNumber(line: *Line, num: u8, c: usize, bg: VColor) void {
+    const pad = (c -| 2) / 2;
+    const style = VStyle{ .fg = fg_idx, .bg = bg };
+    line.spaces(pad, style);
+    writeNum(line, num, style);
+    line.spaces(c - 2 - pad, style);
+}
+
+/// Draw one content line of a cell holding a piece: a full-width circle built
+/// from half/full blocks (▄/█/▀) — solid green for white, a green ring over
+/// a dark fill for black. The standard number sits dim in the top-left corner
+/// of the cell, and the king marker is overlaid on the middle row.
+/// `cw` x `ch` is the cell interior, `cl` the current content line.
+fn drawPiece(line: *Line, cw: usize, ch: usize, cl: usize, num: u8, king_glyph: []const u8, king_fg: VColor, outline: VColor, fill: VColor, fill_bg: VColor, bg: VColor) void {
+    const d = cw; // the disc fills the full cell width
+    if (d < 3) {
+        // Too narrow for a circle: a plain block bar.
+        line.write("█", .{ .fg = outline, .bg = bg });
+        for (0..d) |_| line.write("█", .{ .fg = outline, .bg = bg });
+        return;
+    }
+    if (cl == 0) {
+        // Top bulge; the square number sits in the left corner.
+        if (d >= 4) {
+            writeNum(line, num, .{ .fg = fg_idx, .bg = bg });
+            for (0..d - 3) |_| line.write("▄", .{ .fg = outline, .bg = bg });
+            line.write(" ", .{ .fg = outline, .bg = bg });
+        } else {
+            line.write(" ", .{ .fg = outline, .bg = bg });
+            for (0..d - 2) |_| line.write("▄", .{ .fg = outline, .bg = bg });
+            line.write(" ", .{ .fg = outline, .bg = bg });
+        }
+        return;
+    }
+    if (cl == ch - 1) {
+        // Bottom bulge of the circle.
+        line.write(" ", .{ .fg = outline, .bg = bg });
+        for (0..d - 2) |_| line.write("▀", .{ .fg = outline, .bg = bg });
+        line.write(" ", .{ .fg = outline, .bg = bg });
+        return;
+    }
+    // Middle rows: outline edges, fill interior, king marker at the center.
+    const king_at = (d - 1) / 2;
+    line.write("█", .{ .fg = outline, .bg = bg }); // left edge
+    var i: usize = 1;
+    while (i < d - 1) : (i += 1) {
+        if (king_glyph.len > 0 and i == king_at) {
+            line.write(king_glyph, .{ .fg = king_fg, .bg = fill_bg });
+        } else {
+            line.write("█", .{ .fg = fill, .bg = bg });
+        }
+    }
+    line.write("█", .{ .fg = outline, .bg = bg }); // right edge
+}
+
 /// Full-screen draw. Adapts to the terminal: the move-history panel sits
 /// beside the board when the terminal is wide enough, stacked below
 /// otherwise, and is truncated to the available height.
-fn draw(state: *State) void {
-    const term = termSize() orelse TermSize{ .rows = 24, .cols = 80 };
-    const cols: usize = @min(term.cols, 160);
-    const rows: usize = term.rows;
+fn draw(state: *State, vx: *vaxis.Vaxis) void {
+    const win = vx.window();
+    win.clear();
 
-    var screen: [200][2048]u8 = undefined;
-    var lens: [200]usize = undefined;
-    var ln: usize = 0;
+    const cols: usize = win.width;
+    const rows: usize = win.height;
+
+    var y: u16 = 0;
 
     const rules_name = if (state.game.rules == .spanish) "spanish" else "english";
-    putLine(&screen, &lens, &ln, "  Damas-Z TUI   Rules: {s}", .{rules_name});
-    statusLine(state, &screen, &lens, &ln);
+    {
+        var line = Line{ .win = win, .y = y };
+        line.write("  Damas-Z TUI   Rules: ", .{ .fg = fg_status });
+        line.write(rules_name, .{ .fg = fg_status });
+        y += 1;
+    }
+    {
+        var sbuf: [96]u8 = undefined;
+        const slen = statusLine(state, &sbuf);
+        var line = Line{ .win = win, .y = y };
+        line.write(sbuf[0..slen], .{ .fg = fg_status });
+        y += 1;
+    }
 
     // Board of colored cells, no grid lines — the checkerboard comes from
     // the alternating cell tones (matching the web). Pieces fill the whole
@@ -555,45 +511,42 @@ fn draw(state: *State) void {
     const board_w: usize = 2 + 8 * cell_w;
     const n = state.history.len;
 
+    // Per-entry buffers for the history panel: vaxis stores grapheme slices,
+    // so each rendered entry needs its own buffer that lives until render.
+    var ebufs: [64][24]u8 = undefined;
+
     if (side) {
         // Panel header aligned to the panel column (board_w + margin).
-        var line: [2048]u8 = undefined;
-        var len: usize = 0;
-        for (0..board_w + 2) |_| len = appendFmt(&line, len, " ", .{});
-        len = appendFmt(&line, len, "Move history:", .{});
-        len = appendFmt(&line, len, "{s}", .{reset});
-        lens[ln] = len;
-        @memcpy(screen[ln][0..len], line[0..len]);
-        ln += 1;
+        var line = Line{ .win = win, .y = y };
+        line.spaces(board_w + 2, .{});
+        line.write("Move history:", .{ .fg = fg_status });
+        y += 1;
     } else {
-        putLine(&screen, &lens, &ln, "", .{});
+        y += 1; // blank line
     }
 
     for (0..8) |row| {
         const mid = cell_h / 2;
         for (0..cell_h) |cl| {
-            var line: [2048]u8 = undefined;
-            var len: usize = 0;
-            var plain: usize = 0;
+            var line = Line{ .win = win, .y = y };
             if (cl == mid) {
-                len = appendFmt(&line, len, "{d} ", .{row});
+                line.write("01234567"[row..row + 1], .{ .fg = fg_status });
+                line.write(" ", .{ .fg = fg_status });
             } else {
-                len = appendFmt(&line, len, "  ", .{});
+                line.write("  ", .{ .fg = fg_status });
             }
-            plain += 2;
             for (0..8) |col| {
                 const bg = cellBg(state, @intCast(row), @intCast(col));
                 const piece = pieceAt(state.game.board, @intCast(row), @intCast(col));
-                len = appendFmt(&line, len, "{s}", .{bg});
                 const sq = squareAt(@intCast(row), @intCast(col));
                 if (sq) |s| {
                     const num = stdNum(s, state.game.rules);
                     if (piece == .empty) {
                         // Empty square: standard number, dim, on the top line.
                         if (cell_w >= 2 and cl == 0) {
-                            len = appendCellNumber(&line, len, num, cell_w);
+                            drawCellNumber(&line, num, cell_w, bg);
                         } else {
-                            len = appendSpaces(&line, len, cell_w);
+                            line.spaces(cell_w, .{ .bg = bg });
                         }
                     } else {
                         // White = solid green circle; black = dark circle
@@ -601,90 +554,91 @@ fn draw(state: *State) void {
                         const is_white = piece == .white_pawn or piece == .white_king;
                         const is_king = piece == .white_king or piece == .black_king;
                         const king: []const u8 = if (is_king) (if (is_white) "♔" else "♚") else "";
-                        const outline: []const u8 = if (is_white) fg_piece_white else fg_piece_black;
-                        const fill: []const u8 = if (is_white) fg_piece_white else fg_fill_black;
-                        const fill_bg: []const u8 = if (is_white) bg_disc_white else bg_disc_black;
-                        const king_fg: []const u8 = if (is_white) fg_dark else fg_piece_black;
-                        len = appendPiece(&line, len, cell_w, cell_h, cl, num, king, king_fg, outline, fill, fill_bg);
+                        const outline: VColor = if (is_white) fg_piece else fg_piece;
+                        const fill: VColor = if (is_white) fg_piece else fg_fill_black;
+                        const fill_bg: VColor = if (is_white) bg_disc_white else bg_disc_black;
+                        const king_fg: VColor = if (is_white) fg_dark else fg_piece;
+                        drawPiece(&line, cell_w, cell_h, cl, num, king, king_fg, outline, fill, fill_bg, bg);
                     }
                 } else {
-                    len = appendSpaces(&line, len, cell_w);
+                    line.spaces(cell_w, .{ .bg = bg });
                 }
-                len = appendFmt(&line, len, "{s}", .{reset});
-                plain += cell_w;
             }
             if (side and n > 0 and cl == mid) {
                 // One history entry per board row, most recent at the bottom.
                 const show = @min(n, 8);
                 const start = n - show;
                 if (row >= 8 - show) {
-                    var ebuf: [24]u8 = undefined;
-                    const e = historyEntry(&ebuf, state, start + row - (8 - show));
-                    if (plain + e.len + 2 <= cols) len = appendFmt(&line, len, "{s}  {s}{s}", .{ fg_idx, e, reset });
+                    const e = historyEntry(&ebufs[row - (8 - show)], state, start + row - (8 - show));
+                    if (@as(usize, line.x) + e.len + 2 <= cols) {
+                        line.write("  ", .{ .fg = fg_idx });
+                        line.write(e, .{ .fg = fg_idx });
+                    }
                 }
             }
-            lens[ln] = len;
-            @memcpy(screen[ln][0..len], line[0..len]);
-            ln += 1;
+            y += 1;
         }
     }
 
     // Column header aligned to the cells (number left-aligned in each cell).
     {
-        var line: [2048]u8 = undefined;
-        var len: usize = 0;
-        len = appendFmt(&line, len, "  ", .{});
+        var line = Line{ .win = win, .y = y };
+        line.write("  ", .{ .fg = fg_status });
         for (0..8) |col| {
-            len = appendFmt(&line, len, " {d:>2}", .{col});
-            for (0..cell_w -| 3) |_| len = appendFmt(&line, len, " ", .{});
+            // " {d:>2}" = 3 chars per column, matching the old TUI.
+            line.write("  ", .{ .fg = fg_status });
+            line.write("0123456789"[col..col + 1], .{ .fg = fg_status });
+            line.spaces(cell_w -| 3, .{});
         }
-        lens[ln] = len;
-        @memcpy(screen[ln][0..len], line[0..len]);
-        ln += 1;
+        y += 1;
     }
-    putLine(&screen, &lens, &ln, "", .{});
+    y += 1; // blank line
 
     if (!side) {
-        putLine(&screen, &lens, &ln, "  Move history:", .{});
-        const room = rows -| (ln + 3); // leave the two footer lines + margin
-        const show = @min(n, room);
-        for (n - show..n) |i| {
-            var ebuf: [24]u8 = undefined;
-            const e = historyEntry(&ebuf, state, i);
-            putLine(&screen, &lens, &ln, "  {s}", .{e});
+        var line = Line{ .win = win, .y = y };
+        line.write("  Move history:", .{ .fg = fg_status });
+        y += 1;
+        const room = rows -| (@as(usize, y) + 3); // leave the two footer lines + margin
+        const show = @min(n, @min(room, ebufs.len));
+        for (0..show) |k| {
+            const e = historyEntry(&ebufs[k], state, n - show + k);
+            var el = Line{ .win = win, .y = y };
+            el.write("  ", .{ .fg = fg_status });
+            el.write(e, .{ .fg = fg_status });
+            y += 1;
         }
     }
 
-    putLine(&screen, &lens, &ln, "[n]ew  [m]achine  [l]LM  [h]elp  [q]uit", .{});
-    if (state.msg) |msg| putLine(&screen, &lens, &ln, "{s}", .{msg});
-
-    std.debug.print("{s}{s}", .{ clear, fg_status });
-    for (0..@min(ln, rows)) |i| {
-        std.debug.print("{s}\n", .{screen[i][0..lens[i]]});
+    {
+        var line = Line{ .win = win, .y = y };
+        line.write("[n]ew  [m]achine  [l]LM  [h]elp  [q]uit", .{ .fg = fg_status });
+        y += 1;
     }
-    std.debug.print("{s}", .{reset});
+    if (state.msg) |msg| {
+        var line = Line{ .win = win, .y = y };
+        line.write(msg, .{ .fg = fg_status });
+    }
 }
 
-fn statusLine(state: *State, screen: *[200][2048]u8, lens: *[200]usize, ln: *usize) void {
-    var buf: [96]u8 = undefined;
+fn statusLine(state: *State, buf: []u8) usize {
     var len: usize = 0;
     const turn_name = if (state.game.turn == .white) "white" else "black";
     if (state.last_move) |m| {
         var mbuf: [12]u8 = undefined;
         const mn = moveNotation(&mbuf, m, state.game.rules);
-        len = appendFmt(&buf, len, "  Turn: {s}   Last: {s}", .{ turn_name, mn });
+        len = appendFmt(buf, len, "  Turn: {s}   Last: {s}", .{ turn_name, mn });
     } else {
-        len = appendFmt(&buf, len, "  Turn: {s}", .{turn_name});
+        len = appendFmt(buf, len, "  Turn: {s}", .{turn_name});
     }
     if (state.game.isGameOver()) {
         const winner = state.game.winner().?;
         const win_name = if (winner == .white) "white" else "black";
-        len = appendFmt(&buf, len, "   Game over — {s} wins", .{win_name});
+        len = appendFmt(buf, len, "   Game over — {s} wins", .{win_name});
     }
-    putLine(screen, lens, ln, "{s}", .{buf[0..len]});
+    return len;
 }
 
-fn cellBg(state: *State, row: u8, col: u8) []const u8 {
+fn cellBg(state: *State, row: u8, col: u8) VColor {
     const is_cursor = state.cursor_row == row and state.cursor_col == col;
     const sq = squareAt(row, col);
     if (sq) |s| {

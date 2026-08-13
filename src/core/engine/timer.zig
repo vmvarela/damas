@@ -8,6 +8,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// JS host clock (performance.now, monotonic ms). Imported from the "env"
+/// module by the WASM build; never referenced on other targets, so no link
+/// requirement on the host.
+extern "env" fn dz_now_ms() f64;
+
 pub const Timer = struct {
     deadline_ms: i64,
 
@@ -22,6 +27,21 @@ pub const Timer = struct {
 };
 
 fn nowMillis() i64 {
+    // wasm32-freestanding has no OS: the JS host injects the clock.
+    if (builtin.cpu.arch.isWasm()) {
+        return @as(i64, @intFromFloat(dz_now_ms()));
+    }
+    // Windows: QueryPerformanceCounter/Frequency (same pair the stdlib uses).
+    if (builtin.os.tag == .windows) {
+        var qpc: std.os.windows.LARGE_INTEGER = undefined;
+        var qpf: std.os.windows.LARGE_INTEGER = undefined;
+        if (!std.os.windows.ntdll.RtlQueryPerformanceCounter(&qpc).toBool()) return 0;
+        if (!std.os.windows.ntdll.RtlQueryPerformanceFrequency(&qpf).toBool()) return 0;
+        const counter: u64 = @bitCast(qpc);
+        const freq: u64 = @bitCast(qpf);
+        // ~10MHz ticks: counter*1000 stays well under 2^64.
+        return @as(i64, @intCast(counter * 1000 / freq));
+    }
     // Same mapping the stdlib uses (std.Io.Threaded.clockToPosix): UPTIME_RAW
     // on darwin-family, MONOTONIC elsewhere.
     const clock_id: std.posix.clockid_t = switch (builtin.os.tag) {

@@ -6,6 +6,6 @@
 
 const std = @import("std");
 
-pub fn main(init: std.process.Init.Minimal) !void {
+pub fn main(init: std.process.Init) !void {
     try @import("src/damas.zig").main(init);
 }

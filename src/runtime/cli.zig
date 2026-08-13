@@ -4,6 +4,7 @@
 //! opt-in via a manual config edit.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const game_mod = @import("../core/game.zig");
 const move_mod = @import("../core/move.zig");
 const board_mod = @import("../core/board.zig");
@@ -141,7 +142,7 @@ fn readChoice(max: usize) !usize {
     while (true) {
         var len: usize = 0;
         while (true) {
-            const n = try std.posix.read(0, buf[len..]);
+            const n = try readStdin(buf[len..]);
             if (n == 0) return error.Eof;
             len += n;
             if (std.mem.indexOfScalar(u8, buf[0..len], '\n') != null) break;
@@ -158,5 +159,20 @@ fn readChoice(max: usize) !usize {
             continue;
         }
         return v - 1;
+    }
+}
+
+/// Cross-platform stdin read. Windows has no `std.posix.read` on fd 0
+/// (it's a HANDLE), so route through the 0.16 Io abstraction there;
+/// posix keeps the raw read. EOF is reported as 0 bytes on both.
+fn readStdin(buf: []u8) !usize {
+    if (comptime builtin.os.tag == .windows) {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.File.stdin().readStreaming(io, &.{buf}) catch |e| switch (e) {
+            error.EndOfStream => return 0,
+            else => return e,
+        };
+    } else {
+        return std.posix.read(0, buf);
     }
 }

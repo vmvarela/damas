@@ -1,0 +1,25 @@
+{
+  "name": "@vmvarela/damas",
+  "version": "0.0.0",
+  "description": "Checkers game: CLI, TUI and embedded web server in one binary",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vmvarela/damas.git"
+  },
+  "homepage": "https://github.com/vmvarela/damas",
+  "bugs": "https://github.com/vmvarela/damas/issues",
+  "bin": {
+    "damas": "bin/damas.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "checkers", "damas", "game", "cli", "tui", "engine"
+  ],
+  "author": "vmvarela <vmvarela@gmail.com>"
+}

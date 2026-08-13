@@ -5,6 +5,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Version: release CI injects from git tag with -Dversion=X.Y.Z
+    // (sql-pipe pattern); the exe prints it via `damas --version`.
+    const version = b.option(
+        []const u8,
+        "version",
+        "Override version string (default: dev)",
+    ) orelse "dev";
+
     // Run steps only make sense for the native target (cross binaries
     // can't execute on the build host).
     const native = target.result.cpu.arch == builtin.cpu.arch and
@@ -32,23 +40,52 @@ pub fn build(b: *std.Build) void {
     // ponytail: -femit-h regenerates the header from c_api.zig when the ABI
     // changes; the manual include/damas.h copy is fine for now.
 
-    // Host-only executable: the TUI needs raw-mode stdin, the match CLI reads
-    // stdin and makes LLM HTTP calls, and the web mode binds a loopback
-    // socket and embeds apps/web/*. None of that cross-compiles, so the exe
-    // is skipped for non-native targets (the lib above stays universal).
-    // The module is rooted at the repo root (damas_root.zig) so the
-    // @embedFile of apps/web/* resolves within the package path — see
-    // src/runtime/web_assets.zig for why a src/-rooted module can't do that.
-    if (native) {
-        const damas = b.addExecutable(.{
-            .name = "damas",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("damas_root.zig"),
-                .target = target,
-                .optimize = optimize,
+    // The exe compiles for every target (the lib above stays universal too);
+    // only the test *runs* are gated on native. The module is rooted at the
+    // repo root (damas_root.zig) so the @embedFile of apps/web/* resolves
+    // within the package path — see src/runtime/web_assets.zig for why a
+    // src/-rooted module can't do that.
+    const damas = b.addExecutable(.{
+        .name = "damas",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("damas_root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", version);
+    damas.root_module.addOptions("build_options", build_options);
+    // libvaxis is a dependency of the exe module only — the static lib stays
+    // universal (core-only, no tty).
+    const vaxis = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    damas.root_module.addImport("vaxis", vaxis.module("vaxis"));
+    b.installArtifact(damas);
+
+    // WASM standalone module: exports the protocol ABI (src/wasm_api.zig)
+    // for the browser build. Rooted at src/ (protocol imports live under
+    // src/). entry disabled + rdynamic keeps only the exported symbols;
+    // ReleaseSmall keeps the download lean.
+    const web_step = b.step("web", "Build the WASM module and copy web assets");
+    const wasm = b.addExecutable(.{
+        .name = "damas",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm_api.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
             }),
-        });
-        b.installArtifact(damas);
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    wasm.entry = .disabled;
+    wasm.rdynamic = true;
+    web_step.dependOn(&b.addInstallFile(wasm.getEmittedBin(), "web/damas.wasm").step);
+    for ([_][]const u8{ "index.html", "style.css", "app.js" }) |asset| {
+        web_step.dependOn(&b.addInstallFile(b.path(b.fmt("apps/web/{s}", .{asset})), b.fmt("web/{s}", .{asset})).step);
     }
 
     const test_step = b.step("test", "Run core, C API, LLM, and WebSocket tests");
@@ -86,6 +123,17 @@ pub fn build(b: *std.Build) void {
     });
     if (native) test_step.dependOn(&b.addRunArtifact(ws_tests).step);
 
+    // WASM ABI tests (src/wasm_api.zig): the round-trip test runs natively;
+    // the wasm32 branch of timer.zig (dz_now_ms) is never referenced here.
+    const wasm_api_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm_api.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    if (native) test_step.dependOn(&b.addRunArtifact(wasm_api_tests).step);
+
     // C API test: compile test/c_api_test.c against the static lib.
     const c_module = b.createModule(.{
         .target = target,
@@ -97,4 +145,17 @@ pub fn build(b: *std.Build) void {
     c_module.linkLibrary(lib);
     const c_test = b.addExecutable(.{ .name = "c_api_test", .root_module = c_module });
     if (native) test_step.dependOn(&b.addRunArtifact(c_test).step);
+
+    // TUI tests (stdNum notation): module root at src/ so tui.zig's `../core`
+    // imports resolve; tui.zig imports vaxis, so the test module needs the
+    // same import wiring as the exe.
+    const tui_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    tui_tests.root_module.addImport("vaxis", vaxis.module("vaxis"));
+    if (native) test_step.dependOn(&b.addRunArtifact(tui_tests).step);
 }

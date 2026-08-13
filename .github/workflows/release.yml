@@ -788,6 +788,7 @@ jobs:
           git clone \
             "https://x-access-token:${NIX_PACKAGES_TOKEN}@github.com/vmvarela/nix-packages.git" \
             nix-repo
+          mkdir -p nix-repo/pkgs/damas
           cp versions.json nix-repo/pkgs/damas/versions.json
           cd nix-repo
           git config user.name  "github-actions[bot]"

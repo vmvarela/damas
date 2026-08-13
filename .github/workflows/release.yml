@@ -154,13 +154,15 @@ jobs:
   # ── Publish to npm ─────────────────────────────────────────────────────
   # Requires:
   #   1. Package claimed on npmjs.com: @vmvarela/damas
-  #   2. Trusted Publishing configured on npmjs.com for repo vmvarela/damas, workflow release.yml
-  #   3. Repository variable NPM_TRUSTED_PUBLISHING=true set after configuring npm Trusted Publisher
-  #   4. No NPM_TOKEN secret needed — uses OIDC (id-token: write)
+  #   2a. Trusted Publishing (OIDC): npmjs.com trusted publisher for repo
+  #       vmvarela/damas, workflow release.yml + variable NPM_TRUSTED_PUBLISHING=true
+  #      → publishes with --provenance
+  #   2b. OR classic Automation token as secret NPM_TOKEN → publishes without
+  #       provenance (works with 2FA, no trusted publisher needed)
   publish-npm:
     name: Publish to npm
     needs: release
-    if: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
+    if: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' || secrets.NPM_TOKEN != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -198,8 +200,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           npm version "$VERSION" --no-git-tag-version --workspaces=false --prefix ./npm-pkg
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC + provenance)
+        if: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
         run: npm publish ./npm-pkg --provenance --access public
+
+      - name: Publish to npm (token)
+        if: ${{ vars.NPM_TRUSTED_PUBLISHING != 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish ./npm-pkg --access public
 
   # ── Update Homebrew tap ─────────────────────────────────────────────
   # Requires:

@@ -2,7 +2,7 @@
 //!
 //! The @embedFile calls live INSIDE a function on purpose: @embedFile resolves
 //! relative to this file and must stay within the module's package path. The
-//! damas-z exe module is rooted at the repo root, so "../../apps/web" resolves
+//! damas exe module is rooted at the repo root, so "../../apps/web" resolves
 //! fine there; the ws_tests module is rooted at src/ where the same paths
 //! would be "outside package path" — but function bodies are analyzed lazily,
 //! and the tests never call `get`, so the embeds are never compiled in that

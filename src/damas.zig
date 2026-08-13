@@ -1,4 +1,4 @@
-//! damas-z: single binary entry — subcommands for the match CLI, the TUI,
+//! damas: single binary entry — subcommands for the match CLI, the TUI,
 //! and the web server (user requirement: "todo en un mismo binario, incluido
 //! el servicio web"). Bare invocation = config-driven match (backward compat).
 
@@ -9,11 +9,11 @@ const server = @import("runtime/websocket/server.zig");
 const config_mod = @import("utils/config.zig");
 
 const usage =
-    \\damas-z — damas (checkers) engine
-    \\  damas-z           partida config-driven (config.json: human|minimax|llm)
-    \\  damas-z web       servicio web (frontend embebido + WebSocket) y abre el navegador
-    \\  damas-z tui       terminal UI interactiva
-    \\  damas-z help      esta ayuda
+    \\damas — damas (checkers) engine
+    \\  damas           partida config-driven (config.json: human|minimax|llm)
+    \\  damas web       servicio web (frontend embebido + WebSocket) y abre el navegador
+    \\  damas tui       terminal UI interactiva
+    \\  damas help      esta ayuda
     \\  --rules english|spanish  variante de reglas (default: config.json / english;
     \\                    en web, default del selector). Se acepta antes o despues del subcomando.
     \\
@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             return;
         }
     } else {
-        return cli.runMatch(rules_flag); // backward compat: bare damas-z = match
+        return cli.runMatch(rules_flag); // backward compat: bare damas = match
     }
 
     std.debug.print("{s}", .{usage});

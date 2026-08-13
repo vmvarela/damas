@@ -36,19 +36,19 @@ pub fn build(b: *std.Build) void {
     // stdin and makes LLM HTTP calls, and the web mode binds a loopback
     // socket and embeds apps/web/*. None of that cross-compiles, so the exe
     // is skipped for non-native targets (the lib above stays universal).
-    // The module is rooted at the repo root (damas_z_root.zig) so the
+    // The module is rooted at the repo root (damas_root.zig) so the
     // @embedFile of apps/web/* resolves within the package path — see
     // src/runtime/web_assets.zig for why a src/-rooted module can't do that.
     if (native) {
-        const damas_z = b.addExecutable(.{
-            .name = "damas-z",
+        const damas = b.addExecutable(.{
+            .name = "damas",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("damas_z_root.zig"),
+                .root_source_file = b.path("damas_root.zig"),
                 .target = target,
                 .optimize = optimize,
             }),
         });
-        b.installArtifact(damas_z);
+        b.installArtifact(damas);
     }
 
     const test_step = b.step("test", "Run core, C API, LLM, and WebSocket tests");

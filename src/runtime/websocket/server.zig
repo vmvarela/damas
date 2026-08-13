@@ -141,7 +141,7 @@ fn getProvider(
     return prov;
 }
 
-const LastMove = struct { from: u8, to: u8 };
+const LastMove = struct { from: u8, to: u8, captured: u8 };
 
 const StateResponse = struct {
     board: [64]u8,
@@ -163,7 +163,7 @@ fn stateJson(
     err: ?[]const u8,
 ) ![]u8 {
     const last_move: ?LastMove = if (conn.last_move) |m|
-        .{ .from = m.from, .to = m.to }
+        .{ .from = m.from, .to = m.to, .captured = m.num_captured }
     else
         null;
     const resp = StateResponse{

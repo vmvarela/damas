@@ -145,6 +145,18 @@
     }
   }
 
+  function pieceGlyph(ch) {
+    // Pawns: no glyph — the piece shape (outlined vs filled circle) carries the side.
+    // Kings: K label.
+    switch (ch) {
+      case 'w': return '';
+      case 'W': return 'K';
+      case 'b': return '';
+      case 'B': return 'K';
+      default: return '';
+    }
+  }
+
   function pieceOwner(ch) {
     if (ch === 'w' || ch === 'W') return 'white';
     if (ch === 'b' || ch === 'B') return 'black';
@@ -175,7 +187,7 @@
 
           const idxLabel = document.createElement('span');
           idxLabel.className = 'idx';
-          idxLabel.textContent = sq;
+          idxLabel.textContent = stdNum(sq);
           cell.appendChild(idxLabel);
 
           if (classes) {
@@ -184,7 +196,7 @@
             piece.setAttribute('role', 'img');
             piece.setAttribute('aria-label', describePiece(ch));
             if (sq === selectedSq) piece.classList.add('selected');
-            if (ch === 'W' || ch === 'B') piece.textContent = '♔';
+            piece.textContent = pieceGlyph(ch);
             cell.appendChild(piece);
           }
 
@@ -258,9 +270,9 @@
 
   function renderHistory() {
     historyEl.innerHTML = '';
-    moveHistory.forEach((mv, i) => {
+    moveHistory.forEach((mv) => {
       const li = document.createElement('li');
-      li.textContent = `${i + 1}. ${mv.turn}: ${fmtSq(mv.from)} → ${fmtSq(mv.to)}`;
+      li.textContent = `${mv.turn}: ${stdNum(mv.from)}${mv.captured ? 'x' : '-'}${stdNum(mv.to)}`;
       li.addEventListener('click', () => {
         selectedSq = null;
         highlightMove(mv);
@@ -270,9 +282,15 @@
     historyEl.scrollTop = historyEl.scrollHeight;
   }
 
-  function fmtSq(sq) {
-    const rc = sqToRowCol(sq);
-    return `${rc.row},${rc.col}`;
+  // Standard 1-32 notation number for an internal square index.
+  // Verified against real records: English "11-15" (1981 Tinsley–Long:
+  // "9-14 23-18 14x23 27x18"), Spanish "9-13". English standard puts black
+  // on 1-12; the app shows white at top, so English numbering is flipped
+  // 180°. Spanish numbering matches the app's orientation directly.
+  function stdNum(sq) {
+    if (state.rules === 'spanish') return sq + 1;
+    const row = Math.floor(sq / 4);
+    return (7 - row) * 4 + (sq % 4) + 1;
   }
 
   function highlightMove(mv) {
@@ -285,7 +303,7 @@
       if (!isDark(r, c)) return;
       const sq = rowColToSq(r, c);
       if (sq === mv.from || sq === mv.to) {
-        cell.style.outline = '3px dashed var(--accent)';
+        cell.style.outline = '2px dashed var(--accent)';
       }
     });
     setTimeout(() => {
@@ -317,6 +335,7 @@
           turn: msg.turn === 'white' ? 'black' : 'white',
           from: last.from,
           to: last.to,
+          captured: last.captured > 0,
         });
       }
     }

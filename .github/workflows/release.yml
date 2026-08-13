@@ -307,14 +307,18 @@ jobs:
     name: Update AUR package
     needs: release
     runs-on: ubuntu-latest
+    env:
+      HAS_AUR_TOKEN: ${{ secrets.AUR_SSH_KEY != '' }}
     steps:
       - name: Download all artifacts
+        if: ${{ env.HAS_AUR_TOKEN == 'true' }}
         uses: actions/download-artifact@v8
         with:
           path: artifacts/
           merge-multiple: true
 
       - name: Generate PKGBUILD
+        if: ${{ env.HAS_AUR_TOKEN == 'true' }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
@@ -362,6 +366,7 @@ jobs:
           cat PKGBUILD
 
       - name: Publish to AUR
+        if: ${{ env.HAS_AUR_TOKEN == 'true' }}
         uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: damas

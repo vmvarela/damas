@@ -26,13 +26,13 @@ pub const LlmProvider = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        request_move: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator, req: Request) anyerror!Response,
+        requestMove: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator, req: Request) anyerror!Response,
         /// Free provider state (no-op for stack-backed fakes).
         deinit: *const fn (ctx: *anyopaque) void,
     };
 
-    pub fn request_move(self: LlmProvider, allocator: std.mem.Allocator, req: Request) anyerror!Response {
-        return self.vtable.request_move(self.ctx, allocator, req);
+    pub fn requestMove(self: LlmProvider, allocator: std.mem.Allocator, req: Request) anyerror!Response {
+        return self.vtable.requestMove(self.ctx, allocator, req);
     }
 
     /// Free provider state. Call once at shutdown, or not at all if the

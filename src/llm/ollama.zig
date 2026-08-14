@@ -51,9 +51,7 @@ fn requestMove(ctx: *anyopaque, allocator: std.mem.Allocator, req: Request) anye
     const url = try std.fmt.allocPrint(allocator, "{s}/api/generate", .{self.base_url});
     defer allocator.free(url);
 
-    const body = try std.fmt.allocPrint(allocator,
-        "{{\"model\":\"{s}\",\"prompt\":{f},\"stream\":false,\"format\":\"json\"}}",
-        .{ self.model, std.json.fmt(prompt, .{}) });
+    const body = try std.fmt.allocPrint(allocator, "{{\"model\":\"{s}\",\"prompt\":{f},\"stream\":false,\"format\":\"json\"}}", .{ self.model, std.json.fmt(prompt, .{}) });
     defer allocator.free(body);
 
     const resp_body = try http_util.postJson(allocator, url, &.{
@@ -76,4 +74,4 @@ pub fn parseGenerateResponse(allocator: std.mem.Allocator, resp_body: []const u8
     return provider.parseMoveJson(allocator, parsed.value.response, legal_moves);
 }
 
-const vtable = LlmProvider.VTable{ .request_move = requestMove, .deinit = stateDeinit };
+const vtable = LlmProvider.VTable{ .requestMove = requestMove, .deinit = stateDeinit };

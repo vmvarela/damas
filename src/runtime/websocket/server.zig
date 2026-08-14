@@ -86,6 +86,30 @@ fn serveStatic(writer: *std.Io.Writer, target: []const u8, method: std.http.Meth
     try writer.flush();
 }
 
+/// Idle read deadline: a connection with no incoming data for this long is
+/// reaped (dead tab, silent handshake). Dribbling data never hits it — the
+/// window only counts total silence.
+/// ponytail: covers only the wait for the FIRST byte of a message; a peer
+/// that sends a partial frame then stalls still parks the thread (the poll
+/// gate can't interrupt inside readSmallMessage). Pre-existing behavior,
+/// accepted. Also: poll-gate instead of SO_RCVTIMEO — Threaded's read path
+/// maps a read timeout's EAGAIN to errnoBug, which panics the server in
+/// Debug builds.
+const idle_timeout_ms: i32 = 5 * 60 * 1000;
+
+/// True if the connection has data to read, waiting up to `timeout_ms` for it.
+/// Data already buffered in `reader` counts as available (frames can arrive
+/// in one TCP segment). On platforms without a portable poll (windows) the
+/// read just blocks, status quo.
+fn waitReadable(reader: *const std.Io.Reader, fd: std.posix.fd_t, timeout_ms: i32) bool {
+    if (reader.end > reader.seek) return true;
+    if (builtin.os.tag == .windows) return true;
+    var fds = [_]std.posix.pollfd{.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 }};
+    // poll failure: let the read surface the real error.
+    const n = std.posix.poll(&fds, timeout_ms) catch return true;
+    return n > 0;
+}
+
 fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_mod.Variant) !void {
     defer stream.close(io);
     var in_buf: [65536]u8 = undefined;
@@ -94,6 +118,9 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_m
     var connection_writer = stream.writer(io, &out_buf);
     var srv = std.http.Server.init(&connection_reader.interface, &connection_writer.interface);
 
+    // Idle reaping also covers the handshake: a client that connects but never
+    // sends a request must not park its thread forever.
+    if (!waitReadable(&connection_reader.interface, stream.socket.handle, idle_timeout_ms)) return;
     var req = try srv.receiveHead();
     switch (req.upgradeRequested()) {
         .websocket => |opt_key| {
@@ -103,7 +130,7 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_m
             // waits for the handshake while we block in readSmallMessage
             // (deadlock — verified with a raw-socket client).
             try ws.flush();
-            serveGame(&ws, default_rules) catch {};
+            serveGame(&ws, default_rules, stream.socket.handle) catch {};
         },
         // Plain HTTP: serve the embedded frontend (apps/web/*) or 404 so
         // non-WebSocket clients don't hang.
@@ -113,7 +140,7 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_m
     }
 }
 
-fn serveGame(ws: *std.http.Server.WebSocket, default_rules: game_mod.Variant) !void {
+fn serveGame(ws: *std.http.Server.WebSocket, default_rules: game_mod.Variant, fd: std.posix.fd_t) !void {
     // Default from the server's --rules flag; new_game can override.
     var game = try game_mod.Game.initRules(std.heap.page_allocator, default_rules);
     defer game.deinit();
@@ -121,6 +148,10 @@ fn serveGame(ws: *std.http.Server.WebSocket, default_rules: game_mod.Variant) !v
     defer if (conn.provider) |p| p.deinit();
 
     while (true) {
+        // Idle reaping: close after `idle_timeout_ms` of silence. `return`
+        // unwinds handleConnection's `defer stream.close`, so the thread
+        // exits and the fd is freed.
+        if (!waitReadable(ws.input, fd, idle_timeout_ms)) return;
         const msg = ws.readSmallMessage() catch return; // close, oversize, or protocol error
         switch (msg.opcode) {
             .ping => {

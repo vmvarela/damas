@@ -5,8 +5,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Version: release CI injects from git tag with -Dversion=X.Y.Z
-    // (sql-pipe pattern); the exe prints it via `damas --version`.
+    // Version: release CI injects from git tag with -Dversion=X.Y.Z; the
+    // exe prints it via `damas --version`.
     const version = b.option(
         []const u8,
         "version",
@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run core, LLM, and WebSocket tests");
 
-    // Core Zig tests (engine + game + player).
+    // Core Zig tests (engine + game).
     const core_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/engine_tests.zig"),

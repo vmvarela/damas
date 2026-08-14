@@ -32,7 +32,7 @@ pub const MoveList = move_mod.MoveList;
 
 /// Draughts rule variant. English is the default; Spanish adds flying kings,
 /// forward-only pawn captures, and the capture quantity/quality laws.
-/// Tags are explicit: the C ABI (c_api.zig, include/damas.h) encodes 0/1.
+/// Tags are explicit: 0/1 match the Spanish/English variant enum.
 pub const Variant = enum(u8) { english = 0, spanish = 1 };
 
 const squareToRowCol = board_mod.squareToRowCol;
@@ -197,7 +197,8 @@ fn kingsCaptured(board: Board32, m: Move) u8 {
 
 /// Spanish capture laws (ley de la cantidad, then ley de la calidad): keep
 /// only the chains with the most captured pieces, and among those, the ones
-/// capturing the most kings. No-op when there are no captures.
+/// capturing the most kings. Then drop duplicate chains (see below). No-op
+/// when there are no captures.
 fn applyCaptureLaws(board: Board32, moves: *MoveList) void {
     if (moves.len == 0) return;
     var max_num: u8 = 0;
@@ -214,6 +215,43 @@ fn applyCaptureLaws(board: Board32, moves: *MoveList) void {
         w += 1;
     }
     moves.len = w;
+
+    // Dedupe convergent chains: a flying king can produce several chains with
+    // the same (from, to, captured) Move via different intermediate landing
+    // choices — e.g. the "chain never re-lands on the origin" test position
+    // yields 3 identical entries, all ending on (7,7). A Move records only
+    // start/final/captured, so these are the same board transformation:
+    // keeping one per distinct Move cuts wasted search nodes.
+    // ponytail: dedupe runs after generation, so it can't recover a list that
+    // overflowed the 256-slot MoveList during emission — a contrived flying-
+    // king position with 5+ enemy pieces could still truncate a mandatory
+    // capture. Never observed; if it ever fires, dedupe at emission or assert
+    // on add().
+    var j: usize = 0;
+    for (moves.slice()) |m| {
+        var dup = false;
+        for (moves.items[0..j]) |keep| {
+            if (movesEqual(keep, m)) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            moves.items[j] = m;
+            j += 1;
+        }
+    }
+    moves.len = j;
+}
+
+/// True if two moves are the same chain: same origin, same final square,
+/// same captured squares in the same order (matches isLegalMove's comparison).
+fn movesEqual(a: Move, b: Move) bool {
+    if (a.from != b.from or a.to != b.to or a.num_captured != b.num_captured) return false;
+    for (0..a.num_captured) |i| {
+        if (a.captured[i] != b.captured[i]) return false;
+    }
+    return true;
 }
 
 /// Generate all legal moves for `turn`. Captures are mandatory: if any
@@ -299,15 +337,6 @@ pub fn isLegalMove(board: Board32, turn: Color, move: Move, variant: Variant) bo
             }
         }
         if (match) return true;
-    }
-    return false;
-}
-
-pub fn hasAnyCapture(board: Board32, turn: Color, variant: Variant) bool {
-    var moves = MoveList{};
-    generateMoves(board, turn, &moves, variant);
-    for (moves.slice()) |m| {
-        if (isCapture(m)) return true;
     }
     return false;
 }
@@ -647,9 +676,13 @@ test "spanish: flying king continues on another diagonal after landing" {
 test "spanish: chain never re-lands on the origin" {
     // WK(4,4), BP(3,3), BP(6,6). Chains double back through the origin
     // (M2: the slide may cross it, and it is emptied in the slide), but the
-    // origin is marked visited, so no chain may END on (4,4). Convergent
-    // landings produce duplicate entries; assert on the relevant properties:
-    // all chains capture 2 pieces, at least one ends on (7,7), none on (4,4).
+    // origin is marked visited, so no chain may END on (4,4). Without dedupe
+    // this position yields 6 chains: capture (3,3) first gives 3 landing
+    // choices (0,0)/(1,1)/(2,2) that all converge to the SAME move ending on
+    // (7,7), so applyCaptureLaws collapses them into 1; capture (6,6) first
+    // gives the 3 chains ending on (2,2)/(1,1)/(0,0). Total 4. Assert the
+    // relevant properties: all chains capture 2 pieces, at least one ends on
+    // (7,7), none on (4,4).
     var board: Board32 = [_]Piece{.empty} ** 32;
     board[rowColToSquare(4, 4)] = .white_king;
     board[rowColToSquare(3, 3)] = .black_pawn;
@@ -657,7 +690,7 @@ test "spanish: chain never re-lands on the origin" {
 
     var moves = MoveList{};
     generateMoves(board, .white, &moves, .spanish);
-    try std.testing.expectEqual(@as(usize, 6), moves.len);
+    try std.testing.expectEqual(@as(usize, 4), moves.len);
     var ends_on_77 = false;
     for (moves.slice()) |m| {
         try std.testing.expectEqual(@as(u8, 2), m.num_captured);

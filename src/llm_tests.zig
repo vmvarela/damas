@@ -117,7 +117,7 @@ fn fakeDeinit(ctx: *anyopaque) void {
 }
 
 const fake_vtable = provider.LlmProvider.VTable{
-    .request_move = fakeRequestMove,
+    .requestMove = fakeRequestMove,
     .deinit = fakeDeinit,
 };
 
@@ -145,7 +145,7 @@ test "validation: valid move accepted on first try" {
     const moves = pos.list.slice();
     const first = moves[0];
 
-    var ctx = FakeCtx{ .responses = &.{ fakeResp(first, "looks good") } };
+    var ctx = FakeCtx{ .responses = &.{fakeResp(first, "looks good")} };
     const prov = provider.LlmProvider{ .ctx = &ctx, .vtable = &fake_vtable };
 
     const resp = try validation.requestValidMove(allocator, prov, pos.board, moves);
@@ -200,11 +200,11 @@ test "validation: provider's resolved move is returned unchanged" {
     // Two capture chains sharing the same from/to. The model's number is
     // authoritative: the fake resolves to m2, and validation must NOT
     // replace it with the first from/to match (m1).
-    const m1 = move_mod.Move{ .from = 9, .to = 18, .captured = [_]u8{13, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, .num_captured = 2 };
+    const m1 = move_mod.Move{ .from = 9, .to = 18, .captured = [_]u8{ 13, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .num_captured = 2 };
     const m2 = move_mod.Move{ .from = 9, .to = 18, .captured = [_]u8{0} ** 12, .num_captured = 0 };
     const legal = [_]move_mod.Move{ m1, m2 };
 
-    var ctx = FakeCtx{ .responses = &.{ fakeResp(m2, "number 1, the quiet one") } };
+    var ctx = FakeCtx{ .responses = &.{fakeResp(m2, "number 1, the quiet one")} };
     const prov = provider.LlmProvider{ .ctx = &ctx, .vtable = &fake_vtable };
 
     const resp = try validation.requestValidMove(allocator, prov, board, &legal);

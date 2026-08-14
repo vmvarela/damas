@@ -8,5 +8,4 @@ comptime {
     _ = @import("engine/timer.zig");
     _ = @import("engine/minimax.zig");
     _ = @import("game.zig");
-    _ = @import("player.zig");
 }

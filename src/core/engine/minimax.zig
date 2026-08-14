@@ -112,7 +112,10 @@ fn rootSearch(board: Board32, turn: Color, depth: u8, ctx: *SearchCtx) i32 {
 
 fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, ply: u8, ctx: *SearchCtx) i32 {
     ctx.nodes += 1;
-    if (ctx.timer.expired()) {
+    // Check the clock only every 1024 nodes: clock_gettime per node was the
+    // dominant cost in millions-node searches. Worst-case abort delay is
+    // 1024 nodes (~tens of us) — negligible against any real time budget.
+    if ((ctx.nodes & 0x3ff) == 0 and ctx.timer.expired()) {
         ctx.aborted = true;
         return 0;
     }

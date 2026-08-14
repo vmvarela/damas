@@ -14,8 +14,6 @@
         "build.zig.zon",
         "damas_root.zig",
         "src",
-        "include",
-        "test",
         "apps",
         "config.json",
         "README.md",

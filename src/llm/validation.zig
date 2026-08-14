@@ -25,7 +25,7 @@ pub fn requestValidMove(
     var note: []const u8 = "";
 
     for (0..3) |_| {
-        const resp = prov.request_move(allocator, .{
+        const resp = prov.requestMove(allocator, .{
             .board_ascii = ascii[0..],
             .legal_moves = legal_moves,
             .note = note,

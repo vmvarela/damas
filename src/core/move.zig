@@ -6,8 +6,7 @@ const std = @import("std");
 /// `to` the final landing square, and `captured` lists the squares of the
 /// captured pieces in the order they were taken. Non-capture moves have
 /// `num_captured == 0`.
-/// extern: layout crosses the C ABI (src/c_api.zig, include/damas.h);
-/// compiler-checks the C-compatible layout.
+/// extern: fixed layout, kept ABI-stable; compiler-checks the layout.
 pub const Move = extern struct {
     from: u8,
     to: u8,

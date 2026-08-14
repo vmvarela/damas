@@ -75,9 +75,7 @@ fn requestMove(ctx: *anyopaque, allocator: std.mem.Allocator, req: Request) anye
 /// Build a /chat/completions request body: system + user messages, both
 /// JSON-escaped via std.json.fmt. Returns valid JSON (caller owns).
 pub fn buildChatBody(allocator: std.mem.Allocator, model: []const u8, system: []const u8, user: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator,
-        "{{\"model\":\"{s}\",\"messages\":[{{\"role\":\"system\",\"content\":{f}}},{{\"role\":\"user\",\"content\":{f}}}],\"temperature\":0}}",
-        .{ model, std.json.fmt(system, .{}), std.json.fmt(user, .{}) });
+    return std.fmt.allocPrint(allocator, "{{\"model\":\"{s}\",\"messages\":[{{\"role\":\"system\",\"content\":{f}}},{{\"role\":\"user\",\"content\":{f}}}],\"temperature\":0}}", .{ model, std.json.fmt(system, .{}), std.json.fmt(user, .{}) });
 }
 
 /// Parse a /chat/completions response into a move Response, resolving the
@@ -95,4 +93,4 @@ pub fn parseChatResponse(allocator: std.mem.Allocator, resp_body: []const u8, le
     return provider.parseMoveJson(allocator, parsed.value.choices[0].message.content, legal_moves);
 }
 
-const vtable = LlmProvider.VTable{ .request_move = requestMove, .deinit = stateDeinit };
+const vtable = LlmProvider.VTable{ .requestMove = requestMove, .deinit = stateDeinit };

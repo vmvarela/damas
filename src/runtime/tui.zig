@@ -95,12 +95,14 @@ pub fn run(io: std.Io, env_map: *std.process.Environ.Map, rules_flag: ?config_mo
     const allocator = std.heap.page_allocator;
 
     var cfg = config_mod.Config{ .rules = .spanish, .player_white = .human, .player_black = .human };
-    var cfg_loaded = false;
+    var cfg_loaded = true;
     cfg = config_mod.load(allocator, "config.json") catch |e| switch (e) {
-        error.FileNotFound => cfg,
+        error.FileNotFound => blk: {
+            cfg_loaded = false; // default config active, nothing to free
+            break :blk cfg;
+        },
         else => |err| return err,
     };
-    cfg_loaded = true;
     if (rules_flag) |v| cfg.rules = v; // flag beats config.json
 
     const game = try game_mod.Game.initRules(allocator, cfg.rules);
@@ -409,7 +411,7 @@ const Line = struct {
 fn writeNum(line: *Line, num: u8, style: VStyle) void {
     if (num < 10) {
         line.write(" ", style);
-        line.write("0123456789"[num..num + 1], style);
+        line.write("0123456789"[num .. num + 1], style);
     } else {
         line.write("0123456789"[num / 10 .. num / 10 + 1], style);
         line.write("0123456789"[num % 10 .. num % 10 + 1], style);
@@ -530,7 +532,7 @@ fn draw(state: *State, vx: *vaxis.Vaxis) void {
         for (0..cell_h) |cl| {
             var line = Line{ .win = win, .y = y };
             if (cl == mid) {
-                line.write("01234567"[row..row + 1], .{ .fg = fg_status });
+                line.write("01234567"[row .. row + 1], .{ .fg = fg_status });
                 line.write(" ", .{ .fg = fg_status });
             } else {
                 line.write("  ", .{ .fg = fg_status });
@@ -587,7 +589,7 @@ fn draw(state: *State, vx: *vaxis.Vaxis) void {
         for (0..8) |col| {
             // " {d:>2}" = 3 chars per column, matching the old TUI.
             line.write("  ", .{ .fg = fg_status });
-            line.write("0123456789"[col..col + 1], .{ .fg = fg_status });
+            line.write("0123456789"[col .. col + 1], .{ .fg = fg_status });
             line.spaces(cell_w -| 3, .{});
         }
         y += 1;

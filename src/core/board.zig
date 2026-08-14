@@ -55,10 +55,6 @@ pub fn rowColToSquare(row: u8, col: u8) u8 {
     return row * 4 + col / 2;
 }
 
-pub fn isValidSquare(sq: u8) bool {
-    return sq < 32;
-}
-
 pub fn opponent(color: Color) Color {
     return switch (color) {
         .white => .black,

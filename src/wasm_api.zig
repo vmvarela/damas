@@ -9,6 +9,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const protocol = @import("runtime/protocol.zig");
 const game_mod = @import("core/game.zig");
+const board_mod = @import("core/board.zig");
 
 /// Backing allocator: wasm_allocator in the browser build; page_allocator in
 /// the native test (std.heap.wasm_allocator is a compile error on non-wasm
@@ -80,8 +81,6 @@ export fn dz_handle(len: usize) u64 {
         return (@as(u64, @intCast(@intFromPtr(last_resp.ptr))) << 32) | @as(u64, last_resp.len);
     return @as(u64, last_resp.len);
 }
-
-const board_mod = @import("core/board.zig");
 
 /// Wire fields the round-trip test asserts on (same shape as ws_tests.zig).
 const State = struct {

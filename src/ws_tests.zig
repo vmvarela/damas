@@ -42,7 +42,7 @@ fn fakeDeinit(ctx: *anyopaque) void {
 }
 
 const fake_vtable = provider.LlmProvider.VTable{
-    .request_move = fakeRequestMove,
+    .requestMove = fakeRequestMove,
     .deinit = fakeDeinit,
 };
 

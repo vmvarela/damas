@@ -1,4 +1,4 @@
-const CACHE = 'damas-v1';
+const CACHE = 'damas-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -29,6 +29,26 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Shell (HTML/CSS/JS): stale-while-revalidate — fresh updates without manual cache bumps
+  if (request.mode === 'navigate' || url.pathname.endsWith('.css') || url.pathname.endsWith('.js')) {
+    event.respondWith(
+      caches.match(request).then((cached) => {
+        const network = fetch(request)
+          .then((response) => {
+            if (response && response.ok) {
+              const copy = response.clone();
+              caches.open(CACHE).then((cache) => cache.put(request, copy));
+            }
+            return response;
+          })
+          .catch(() => cached);
+        return cached || network;
+      })
+    );
+    return;
+  }
+
+  // Everything else (wasm, icons, manifest): cache-first
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

@@ -36,8 +36,8 @@ int main(void) {
     assert(!dz_game_over(g));
     assert(dz_game_winner(g) == -1);
 
-    /* default game is English */
-    assert(dz_game_rules(g) == DZ_RULES_ENGLISH);
+    /* default game is Spanish */
+    assert(dz_game_rules(g) == DZ_RULES_SPANISH);
 
     dz_game_free(g);
 

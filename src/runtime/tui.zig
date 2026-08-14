@@ -94,7 +94,7 @@ const State = struct {
 pub fn run(io: std.Io, env_map: *std.process.Environ.Map, rules_flag: ?config_mod.Variant) !void {
     const allocator = std.heap.page_allocator;
 
-    var cfg = config_mod.Config{ .rules = .english, .player_white = .human, .player_black = .human };
+    var cfg = config_mod.Config{ .rules = .spanish, .player_white = .human, .player_black = .human };
     var cfg_loaded = false;
     cfg = config_mod.load(allocator, "config.json") catch |e| switch (e) {
         error.FileNotFound => cfg,
@@ -631,9 +631,12 @@ fn statusLine(state: *State, buf: []u8) usize {
         len = appendFmt(buf, len, "  Turn: {s}", .{turn_name});
     }
     if (state.game.isGameOver()) {
-        const winner = state.game.winner().?;
-        const win_name = if (winner == .white) "white" else "black";
-        len = appendFmt(buf, len, "   Game over — {s} wins", .{win_name});
+        if (state.game.winner()) |winner| {
+            const win_name = if (winner == .white) "white" else "black";
+            len = appendFmt(buf, len, "   Game over — {s} wins", .{win_name});
+        } else {
+            len = appendFmt(buf, len, "   Game over — draw", .{});
+        }
     }
     return len;
 }

@@ -18,9 +18,9 @@ pub const Game = struct {
     rules: Variant,
     allocator: std.mem.Allocator,
 
-    /// Default to English draughts (keeps existing callers unchanged).
+    /// Default to Spanish damas.
     pub fn init(allocator: std.mem.Allocator) !*Game {
-        return initRules(allocator, .english);
+        return initRules(allocator, .spanish);
     }
 
     pub fn initRules(allocator: std.mem.Allocator, variant: Variant) !*Game {
@@ -57,13 +57,14 @@ pub const Game = struct {
         return !hasPieces(self.board, .white) or !hasPieces(self.board, .black);
     }
 
-    /// Winner, or null if the game is not over.
+    /// Winner, or null if the game is not over or ended in a draw.
+    /// A player blocked with no legal move does not lose — it's a draw.
     pub fn winner(self: *Game) ?Color {
         if (!self.isGameOver()) return null;
         if (!hasPieces(self.board, .white)) return .black;
         if (!hasPieces(self.board, .black)) return .white;
-        // Both sides have pieces: the current turn is stalemated.
-        return board_mod.opponent(self.turn);
+        // Both sides have pieces: the current turn is stalemated → draw.
+        return null;
     }
 };
 
@@ -121,7 +122,8 @@ test "game over detection and winner" {
     game.turn = .white;
 
     try std.testing.expect(game.isGameOver());
-    try std.testing.expectEqual(@as(?Color, .black), game.winner());
+    // Stalemated side doesn't lose: the game is a draw.
+    try std.testing.expectEqual(@as(?Color, null), game.winner());
 
     // No pieces left for white.
     game.board = [_]Piece{.empty} ** 32;

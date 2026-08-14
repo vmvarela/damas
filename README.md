@@ -23,9 +23,6 @@ server's default variant for the web UI.
 
 Build: `zig build` (binaries in `zig-out/bin/`), tests: `zig build test`
 (requires Zig **0.16.0 release** — dev builds don't compile libvaxis).
-The `libdamas` static library (`src/c_api.zig` + `include/damas.h`)
-cross-compiles to any target (`-Dtarget=aarch64-linux`, `-Dtarget=wasm32-wasi`);
-`dz_game_new_with_rules(0|1)` selects the variant (see `DZ_RULES_*` in the header).
 
 ## Web: native server or standalone WASM
 

@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
     wasm.entry = .disabled;
     wasm.rdynamic = true;
     web_step.dependOn(&b.addInstallFile(wasm.getEmittedBin(), "web/damas.wasm").step);
-    for ([_][]const u8{ "index.html", "style.css", "app.js" }) |asset| {
+    for ([_][]const u8{ "index.html", "style.css", "app.js", "manifest.webmanifest", "sw.js", "icon-192.png", "icon-512.png", "icon-maskable-512.png" }) |asset| {
         web_step.dependOn(&b.addInstallFile(b.path(b.fmt("apps/web/{s}", .{asset})), b.fmt("web/{s}", .{asset})).step);
     }
 

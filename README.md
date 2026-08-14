@@ -24,6 +24,38 @@ server's default variant for the web UI.
 Build: `zig build` (binaries in `zig-out/bin/`), tests: `zig build test`
 (requires Zig **0.16.0 release** — dev builds don't compile libvaxis).
 
+## LLM providers
+
+LLM players (`"type": "llm"` in `config.json`) use an OpenAI-compatible chat
+endpoint. Set the provider's API key env var; `ollama` needs no key (local
+`http://localhost:11434`). Example:
+
+```json
+{ "player_white": { "type": "llm", "provider": "groq", "model": "llama-3.3-70b-versatile" } }
+```
+
+Omitting `provider` (or passing `--provider`) auto-detects: the first
+`*_API_KEY` env var set (table order) wins; a set-but-empty var
+(`GROQ_API_KEY=""`) is ignored. `--provider <name>` beats `config.json` and
+applies to `damas`, `damas tui`, and `damas web`.
+
+| provider   | API key env var      |
+|------------|----------------------|
+| groq       | GROQ_API_KEY         |
+| openai     | OPENAI_API_KEY       |
+| deepseek   | DEEPSEEK_API_KEY     |
+| mistral    | MISTRAL_API_KEY      |
+| together   | TOGETHER_API_KEY     |
+| fireworks  | FIREWORKS_API_KEY    |
+| xai        | XAI_API_KEY          |
+| cerebras   | CEREBRAS_API_KEY     |
+| openrouter | OPENROUTER_API_KEY   |
+| perplexity | PERPLEXITY_API_KEY   |
+| sambanova  | SAMBANOVA_API_KEY    |
+| deepinfra  | DEEPINFRA_API_KEY    |
+| github     | GITHUB_TOKEN         |
+| ollama     | (no key, local)      |
+
 ## Web: native server or standalone WASM
 
 Two ways to run the web UI:
@@ -52,6 +84,13 @@ dispatches.
 
 `.github/workflows/pages.yml` deploys the WASM bundle to GitHub Pages on every
 push to master (enable it: repo **Settings → Pages → Source: GitHub Actions**).
+
+## Instalar como app (PWA)
+
+El bundle WASM es una PWA instalable (manifest + service worker). En Chrome
+Android, abre la URL de GitHub Pages (p.ej. `https://vmvarela.github.io/damas/`),
+abre el menú ⋮ y elige **"Añadir a pantalla de inicio"**. Una vez instalada,
+la app funciona offline gracias al service worker (cache-first).
 
 ## Development
 

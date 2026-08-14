@@ -1,0 +1,31 @@
+{
+  "packageId": "com.vmvarela.damas",
+  "host": "vmvarela.github.io",
+  "name": "Damas — Spanish Checkers",
+  "launcherName": "Damas",
+  "display": "standalone",
+  "themeColor": "#050805",
+  "themeColorDark": "#000000",
+  "navigationColor": "#000000",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#00000000",
+  "navigationDividerColorDark": "#00000000",
+  "backgroundColor": "#050805",
+  "startUrl": "/damas/",
+  "iconUrl": "https://vmvarela.github.io/damas/icon-512.png",
+  "maskableIconUrl": "https://vmvarela.github.io/damas/icon-maskable-512.png",
+  "appVersion": "1",
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "minSdkVersion": 21,
+  "enableNotifications": false,
+  "shortcuts": [],
+  "webManifestUrl": "https://vmvarela.github.io/damas/manifest.webmanifest",
+  "orientation": "portrait",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android-keystore",
+    "alias": "damas"
+  },
+  "generatorApp": "bubblewrap-cli"
+}

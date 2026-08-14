@@ -15,8 +15,9 @@ const provider_mod = @import("../llm/provider.zig");
 const validation = @import("../llm/validation.zig");
 
 /// Run a config-driven match. `rules_flag` (from `--rules`) overrides the
-/// variant in config.json.
-pub fn runMatch(rules_flag: ?config_mod.Variant) !void {
+/// variant in config.json; `provider_flag` (from `--provider`) overrides the
+/// provider.
+pub fn runMatch(rules_flag: ?config_mod.Variant, provider_flag: ?[]const u8) !void {
     const allocator = std.heap.page_allocator;
 
     // ponytail: fixed path in cwd; no argv parsing (std.os.argv was removed
@@ -65,7 +66,7 @@ pub fn runMatch(rules_flag: ?config_mod.Variant) !void {
         switch (player) {
             .human => if (try playHuman(game)) return,
             .minimax => |mm| try playMinimax(game, mm.time_limit_ms),
-            .llm => |lc| try playLlm(allocator, game, lc, &llm),
+            .llm => |lc| try playLlm(allocator, game, lc, provider_flag, &llm),
         }
     }
 }
@@ -106,12 +107,17 @@ fn playLlm(
     allocator: std.mem.Allocator,
     game: *game_mod.Game,
     cfg: config_mod.LlmConfig,
+    provider_flag: ?[]const u8,
     llm: *?provider_mod.LlmProvider,
 ) !void {
     if (llm.* == null) {
-        llm.* = factory.fromConfig(allocator, cfg) catch |e| switch (e) {
+        // --provider flag beats the provider in config.json.
+        var lcfg = cfg;
+        if (provider_flag) |p| lcfg.provider = p;
+        llm.* = factory.fromConfig(allocator, lcfg) catch |e| switch (e) {
             error.MissingApiKey => {
-                std.debug.print("error: missing API key for provider \"{s}\" (set its env var, e.g. GROQ_API_KEY)\n", .{cfg.provider});
+                const name = lcfg.provider orelse "(auto-detect — no *_API_KEY env var is set)";
+                std.debug.print("error: missing API key for provider \"{s}\" (set its env var)\n", .{name});
                 std.process.exit(1);
             },
             else => |err| return err,

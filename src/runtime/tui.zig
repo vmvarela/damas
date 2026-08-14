@@ -52,6 +52,8 @@ const State = struct {
     cfg_loaded: bool,
     game: *game_mod.Game,
     llm: ?provider_mod.LlmProvider,
+    /// From --provider; null = auto-detect / config.json.
+    provider_flag: ?[]const u8,
 
     cursor_row: u8,
     cursor_col: u8,
@@ -62,13 +64,14 @@ const State = struct {
     history: move_mod.MoveList,
     msg: ?[]const u8,
 
-    fn init(allocator: std.mem.Allocator, cfg: config_mod.Config, loaded: bool, game: *game_mod.Game) State {
+    fn init(allocator: std.mem.Allocator, cfg: config_mod.Config, loaded: bool, game: *game_mod.Game, provider_flag: ?[]const u8) State {
         return .{
             .allocator = allocator,
             .cfg = cfg,
             .cfg_loaded = loaded,
             .game = game,
             .llm = null,
+            .provider_flag = provider_flag,
             .cursor_row = 0,
             .cursor_col = 0,
             .selected = null,
@@ -90,8 +93,9 @@ const State = struct {
 };
 
 /// Run the TUI. `rules_flag` (from `--rules`) overrides the variant in
-/// config.json (and the English default when no config is present).
-pub fn run(io: std.Io, env_map: *std.process.Environ.Map, rules_flag: ?config_mod.Variant) !void {
+/// config.json (and the English default when no config is present);
+/// `provider_flag` (from `--provider`) overrides the LLM provider.
+pub fn run(io: std.Io, env_map: *std.process.Environ.Map, rules_flag: ?config_mod.Variant, provider_flag: ?[]const u8) !void {
     const allocator = std.heap.page_allocator;
 
     var cfg = config_mod.Config{ .rules = .spanish, .player_white = .human, .player_black = .human };
@@ -109,7 +113,7 @@ pub fn run(io: std.Io, env_map: *std.process.Environ.Map, rules_flag: ?config_mo
 
     // State owns game: State.deinit() frees it. No errdefer here — a second
     // free on error return would double-free (state.deinit runs first).
-    var state = State.init(allocator, cfg, cfg_loaded, game);
+    var state = State.init(allocator, cfg, cfg_loaded, game, provider_flag);
     defer state.deinit();
 
     var buffer: [1024]u8 = undefined;
@@ -310,7 +314,7 @@ fn llmMove(state: *State) !void {
             return;
         },
         error.MissingApiKey => {
-            state.msg = "Missing API key (GROQ_API_KEY)";
+            state.msg = "Missing API key (set the provider's env var)";
             return;
         },
         else => |err| return err,
@@ -336,8 +340,13 @@ fn llmConfigForTurn(state: *State) config_mod.LlmConfig {
         .white => state.cfg.player_white,
         .black => state.cfg.player_black,
     };
-    if (player == .llm) return player.llm;
-    return .{ .provider = "groq", .model = "llama-3.3-70b-versatile" };
+    if (player == .llm) {
+        // --provider flag beats the provider in config.json (like cli.zig).
+        if (state.provider_flag) |p| return .{ .provider = p, .model = player.llm.model };
+        return player.llm;
+    }
+    // provider_flag null → factory auto-detects from set *_API_KEY env vars.
+    return .{ .provider = state.provider_flag, .model = "llama-3.3-70b-versatile" };
 }
 
 /// Append formatted text to a buffer, returning the new length (truncates

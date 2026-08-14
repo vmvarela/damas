@@ -53,20 +53,20 @@ pub fn parse(allocator: std.mem.Allocator, json: []const u8) !Config {
     const white = try parsePlayer(allocator, root.get("player_white") orelse return error.InvalidConfig);
     errdefer freePlayerStrings(allocator, white);
     const black = try parsePlayer(allocator, root.get("player_black") orelse return error.InvalidConfig);
-    // Optional "rules" field; missing or unknown values fall back to English
-    // so existing configs (and typos) keep working.
-    var variant: Variant = .english;
+    // Optional "rules" field; missing or unknown values fall back to Spanish
+    // (the project default) so existing configs (and typos) keep working.
+    var variant: Variant = .spanish;
     if (root.get("rules")) |v| {
         if (v == .string) variant = parseVariant(v.string);
     }
     return .{ .rules = variant, .player_white = white, .player_black = black };
 }
 
-/// Map a rule-name string to a Variant; anything other than "spanish" (and
-/// null) falls back to English. Shared with the WebSocket server's new_game.
+/// Map a rule-name string to a Variant; anything other than "english" (and
+/// null) falls back to Spanish. Shared with the WebSocket server's new_game.
 pub fn parseVariant(s: []const u8) Variant {
-    if (std.mem.eql(u8, s, "spanish")) return .spanish;
-    return .english;
+    if (std.mem.eql(u8, s, "english")) return .english;
+    return .spanish;
 }
 
 /// Free the strings owned by a parsed PlayerConfig (llm branch). No-op for

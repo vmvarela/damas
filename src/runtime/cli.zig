@@ -47,11 +47,15 @@ pub fn runMatch(rules_flag: ?config_mod.Variant) !void {
     while (true) {
         printBoard(game.board);
         if (game.isGameOver()) {
-            const name: []const u8 = switch (game.winner().?) {
-                .white => "white",
-                .black => "black",
-            };
-            std.debug.print("Game over. Winner: {s}\n", .{name});
+            if (game.winner()) |w| {
+                const name: []const u8 = switch (w) {
+                    .white => "white",
+                    .black => "black",
+                };
+                std.debug.print("Game over. Winner: {s}\n", .{name});
+            } else {
+                std.debug.print("Game over. Draw.\n", .{});
+            }
             return;
         }
         const player = switch (game.turn) {

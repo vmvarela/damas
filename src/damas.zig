@@ -91,7 +91,7 @@ fn strictVariant(s: []const u8) ?config_mod.Variant {
 fn web(rules_flag: ?config_mod.Variant) !void {
     const val = config_mod.getEnvPosix("DZ_WS_PORT") orelse "8080";
     const port = std.fmt.parseInt(u16, val, 10) catch 8080;
-    const default_rules = rules_flag orelse .english;
+    const default_rules = rules_flag orelse .spanish;
     server.serveWeb(port, default_rules) catch |e| {
         // Friendly bind failure: the browser open would otherwise hit a dead
         // port and the user would get a raw error + traceback.

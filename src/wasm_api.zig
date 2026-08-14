@@ -35,7 +35,7 @@ var conn: protocol.ConnState = .{};
 
 /// Rules default for new_game without a "rules" field, from dz_init
 /// (0 = english, 1 = spanish, anything else = english).
-var default_rules: game_mod.Variant = .english;
+var default_rules: game_mod.Variant = .spanish;
 
 /// Most recent response (arena-owned, valid until the next dz_handle call).
 /// The wasm32 ABI encodes it as ptr<<32|len; the native test reads the slice

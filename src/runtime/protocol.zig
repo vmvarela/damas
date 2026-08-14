@@ -93,7 +93,10 @@ pub fn handleMessage(
     }
 
     if (std.mem.eql(u8, action, "compute_minimax")) {
-        const ms = fieldU32(root, "time_limit_ms") orelse 1000;
+        // Cap the client-supplied budget: u32 max (~49 days) would pin a
+        // search thread forever; 0 means "no limit" in timer.zig, so floor
+        // at 1ms to keep the deadline finite.
+        const ms = @max(@min(fieldU32(root, "time_limit_ms") orelse 1000, 30_000), 1);
         const result = minimax.search(game.board, game.turn, ms, allocator, game.rules) catch
             return stateJson(allocator, game, conn, "search failed");
         if (!game.applyMove(result.move))

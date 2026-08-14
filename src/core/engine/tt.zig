@@ -51,7 +51,8 @@ pub const TranspositionTable = struct {
     }
 
     pub fn clear(self: *TranspositionTable) void {
-        @memset(self.entries, undefined);
+        // Zeroed like init: garbage keys would alias real hashes (bogus scores).
+        @memset(self.entries, std.mem.zeroes(TTEntry));
     }
 };
 

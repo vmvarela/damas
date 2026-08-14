@@ -85,6 +85,13 @@ dispatches.
 `.github/workflows/pages.yml` deploys the WASM bundle to GitHub Pages on every
 push to master (enable it: repo **Settings → Pages → Source: GitHub Actions**).
 
+## Instalar como app (PWA)
+
+El bundle WASM es una PWA instalable (manifest + service worker). En Chrome
+Android, abre la URL de GitHub Pages (p.ej. `https://vmvarela.github.io/damas/`),
+abre el menú ⋮ y elige **"Añadir a pantalla de inicio"**. Una vez instalada,
+la app funciona offline gracias al service worker (cache-first).
+
 ## Development
 
 ```sh

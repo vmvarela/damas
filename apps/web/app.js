@@ -196,6 +196,9 @@
     const params = new URLSearchParams(location.search);
     if (params.has('wasm')) return 'wasm';
     if (params.has('server')) return 'ws';
+    // Offline: the SW served this page, so the wasm is in cache — skip the
+    // HEAD probe (SW doesn't intercept HEAD) and go straight to WASM mode.
+    if (!navigator.onLine) return 'wasm';
     try {
       const res = await fetch('damas.wasm', { method: 'HEAD' });
       return res.ok ? 'wasm' : 'ws';

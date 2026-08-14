@@ -9,3 +9,9 @@ python http.server needed):
 2. Play at `http://127.0.0.1:8080` — the page, styles, script, and the
    WebSocket server all come from the one binary (use `?port=8081` in the URL
    if the WebSocket server is on a different port).
+
+## Instalar como app (PWA)
+
+El bundle estático (`zig build web` → `zig-out/web/`) es una PWA instalable.
+En Chrome Android, abre la URL de GitHub Pages, menú ⋮ → **"Añadir a pantalla
+de inicio"**. Offline vía service worker (cache-first).

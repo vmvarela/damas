@@ -13,12 +13,16 @@ const provider_mod = @import("../../llm/provider.zig");
 const protocol = @import("../protocol.zig");
 const web = @import("../web_assets.zig");
 
+/// Provider default for request_llm (from --provider); null = auto-detect.
+/// Set once in serveWeb (single-threaded, before the accept loop); read-only
+/// after, from spawned connection threads.
+var g_default_provider: ?[]const u8 = null;
+
 /// Default provider builder injected into `protocol.ConnState` by serveGame:
-/// the factory-backed groq path that used to be handleMessage's implicit
-/// default. Keeps the factory (and its HTTP deps) out of the pure protocol
-/// layer.
+/// the factory-backed path that used to be handleMessage's implicit default.
+/// Keeps the factory (and its HTTP deps) out of the pure protocol layer.
 fn defaultProvider(allocator: std.mem.Allocator, model: []const u8) anyerror!provider_mod.LlmProvider {
-    return factory.fromConfig(allocator, .{ .provider = "groq", .model = model });
+    return factory.fromConfig(allocator, .{ .provider = g_default_provider, .model = model });
 }
 
 /// Accept loop on loopback:port. Each connection gets a fresh game and is
@@ -45,7 +49,8 @@ pub fn serve(port: u16, default_rules: game_mod.Variant) !void {
 
 /// Web mode: static frontend + WebSocket on the same port, browser opened.
 /// Set DZ_NO_BROWSER=1 to skip launching a browser (CI, headless).
-pub fn serveWeb(port: u16, default_rules: game_mod.Variant) !void {
+pub fn serveWeb(port: u16, default_rules: game_mod.Variant, default_provider: ?[]const u8) !void {
+    g_default_provider = default_provider;
     std.debug.print("Damas web en http://127.0.0.1:{d} — Ctrl-C para salir\n", .{port});
     if (config_mod.getEnvPosix("DZ_NO_BROWSER") == null) openBrowser(port);
     try serve(port, default_rules);

@@ -7,7 +7,8 @@ const rules_mod = @import("../core/rules.zig");
 pub const Variant = rules_mod.Variant;
 
 pub const LlmConfig = struct {
-    provider: []const u8,
+    /// null = auto-detect from set *_API_KEY env vars (factory.detectProvider).
+    provider: ?[]const u8,
     model: []const u8,
 };
 
@@ -74,7 +75,7 @@ pub fn parseVariant(s: []const u8) Variant {
 pub fn freePlayerStrings(allocator: std.mem.Allocator, p: PlayerConfig) void {
     switch (p) {
         .llm => |l| {
-            allocator.free(l.provider);
+            if (l.provider) |prov| allocator.free(prov);
             allocator.free(l.model);
         },
         else => {},
@@ -88,11 +89,14 @@ fn parsePlayer(allocator: std.mem.Allocator, value: std.json.Value) !PlayerConfi
     if (type_val != .string) return error.InvalidConfig;
     const tag = type_val.string;
     if (std.mem.eql(u8, tag, "llm")) {
-        const provider_val = obj.get("provider") orelse return error.InvalidConfig;
+        var provider_str: ?[]const u8 = null;
+        if (obj.get("provider")) |pv| {
+            if (pv != .string) return error.InvalidConfig;
+            provider_str = try allocator.dupe(u8, pv.string);
+            errdefer allocator.free(provider_str.?);
+        }
         const model_val = obj.get("model") orelse return error.InvalidConfig;
-        if (provider_val != .string or model_val != .string) return error.InvalidConfig;
-        const provider_str = try allocator.dupe(u8, provider_val.string);
-        errdefer allocator.free(provider_str);
+        if (model_val != .string) return error.InvalidConfig;
         const model = try allocator.dupe(u8, model_val.string);
         return .{ .llm = .{ .provider = provider_str, .model = model } };
     }

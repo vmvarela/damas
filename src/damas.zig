@@ -17,6 +17,7 @@ const usage =
     \\  damas help      esta ayuda
     \\  --rules english|spanish  variante de reglas (default: config.json / english;
     \\                    en web, default del selector). Se acepta antes o despues del subcomando.
+    \\  --provider <name>  provider OpenAI-compatible (default: auto-detect por env / config.json)
     \\
 ;
 
@@ -33,6 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
     var sub: ?[]const u8 = null;
     var rules_flag: ?config_mod.Variant = null;
+    var provider_flag: ?[]const u8 = null;
 
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--rules")) {
@@ -43,6 +45,14 @@ pub fn main(init: std.process.Init) !void {
             };
             rules_flag = strictVariant(val) orelse {
                 std.debug.print("error: variante invalida \"{s}\" (english|spanish)\n", .{val});
+                std.debug.print("{s}", .{usage});
+                std.process.exit(1);
+            };
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--provider")) {
+            provider_flag = args.next() orelse {
+                std.debug.print("error: --provider requiere un valor\n", .{});
                 std.debug.print("{s}", .{usage});
                 std.process.exit(1);
             };
@@ -64,14 +74,14 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (sub) |s| {
-        if (std.mem.eql(u8, s, "web")) return web(rules_flag);
-        if (std.mem.eql(u8, s, "tui")) return tui.run(init.io, init.environ_map, rules_flag);
+        if (std.mem.eql(u8, s, "web")) return web(rules_flag, provider_flag);
+        if (std.mem.eql(u8, s, "tui")) return tui.run(init.io, init.environ_map, rules_flag, provider_flag);
         if (std.mem.eql(u8, s, "help") or std.mem.eql(u8, s, "-h") or std.mem.eql(u8, s, "--help")) {
             std.debug.print("{s}", .{usage});
             return;
         }
     } else {
-        return cli.runMatch(rules_flag); // backward compat: bare damas = match
+        return cli.runMatch(rules_flag, provider_flag); // backward compat: bare damas = match
     }
 
     std.debug.print("{s}", .{usage});
@@ -88,11 +98,11 @@ fn strictVariant(s: []const u8) ?config_mod.Variant {
 
 /// Web mode: port from DZ_WS_PORT, default 8080. The flag (if any) becomes
 /// the server's default variant for new games without an explicit "rules".
-fn web(rules_flag: ?config_mod.Variant) !void {
+fn web(rules_flag: ?config_mod.Variant, provider_flag: ?[]const u8) !void {
     const val = config_mod.getEnvPosix("DZ_WS_PORT") orelse "8080";
     const port = std.fmt.parseInt(u16, val, 10) catch 8080;
     const default_rules = rules_flag orelse .spanish;
-    server.serveWeb(port, default_rules) catch |e| {
+    server.serveWeb(port, default_rules, provider_flag) catch |e| {
         // Friendly bind failure: the browser open would otherwise hit a dead
         // port and the user would get a raw error + traceback.
         std.debug.print("error: no se pudo abrir 127.0.0.1:{d}: {s} (puerto en uso?)\n", .{ port, @errorName(e) });

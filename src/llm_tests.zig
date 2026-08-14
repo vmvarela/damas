@@ -28,6 +28,21 @@ comptime {
     _ = config_mod.load;
 }
 
+test "factory: routing for unknown, ollama, and table providers" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.UnknownProvider, factory.fromConfig(allocator, .{ .provider = "nope", .model = "m" }));
+
+    const ol = try factory.fromConfig(allocator, .{ .provider = "ollama", .model = "llama3" });
+    defer ol.deinit();
+
+    // Table match fires (env null → MissingApiKey proves the groq row was hit).
+    try std.testing.expectError(error.MissingApiKey, factory.fromConfig(allocator, .{ .provider = "groq", .model = "m" }));
+
+    // Env is null in tests → auto-detect finds nothing → MissingApiKey.
+    try std.testing.expectError(error.MissingApiKey, factory.fromConfig(allocator, .{ .provider = null, .model = "m" }));
+    try std.testing.expect(factory.detectProvider() == null);
+}
+
 test "config: parse() reads llm and minimax players" {
     const allocator = std.testing.allocator;
     const cfg = try config_mod.parse(allocator,
@@ -35,7 +50,7 @@ test "config: parse() reads llm and minimax players" {
     );
     defer switch (cfg.player_white) {
         .llm => |l| {
-            allocator.free(l.provider);
+            if (l.provider) |prov| allocator.free(prov);
             allocator.free(l.model);
         },
         else => {},
@@ -44,7 +59,7 @@ test "config: parse() reads llm and minimax players" {
     const white = cfg.player_white;
     const black = cfg.player_black;
     try std.testing.expect(white == .llm);
-    try std.testing.expectEqualStrings("groq", white.llm.provider);
+    try std.testing.expectEqualStrings("groq", white.llm.provider.?);
     try std.testing.expectEqualStrings("llama-3.3-70b-versatile", white.llm.model);
     try std.testing.expect(black == .minimax);
     try std.testing.expectEqual(@as(u32, 2000), black.minimax.time_limit_ms);

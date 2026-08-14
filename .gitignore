@@ -7,3 +7,11 @@ zig-out/
 .opencode/
 
 .playwright-mcp/
+
+# Android TWA (packaging/android) — keystore y artefactos de build
+packaging/android/android-keystore
+packaging/android/app-release-*
+packaging/android/app/build/
+packaging/android/build/
+packaging/android/.gradle/
+packaging/android/local.properties

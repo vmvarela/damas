@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.vmvarela.damas",
+    "sha256_cert_fingerprints": ["36:24:D4:58:66:48:B4:AE:C7:82:C1:24:21:BF:05:B4:40:22:D1:CD:6F:A9:40:FE:6C:80:D1:99:C0:48:F3:A"]
+  }
+}]

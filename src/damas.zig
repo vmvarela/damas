@@ -15,7 +15,7 @@ const usage =
     \\  damas web       servicio web (frontend embebido + WebSocket) y abre el navegador
     \\  damas tui       terminal UI interactiva
     \\  damas help      esta ayuda
-    \\  --rules english|spanish  variante de reglas (default: config.json / english;
+    \\  --rules english|spanish  variante de reglas (default: config.json / spanish;
     \\                    en web, default del selector). Se acepta antes o despues del subcomando.
     \\  --provider <name>  provider OpenAI-compatible (default: auto-detect por env / config.json)
     \\

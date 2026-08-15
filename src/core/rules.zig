@@ -30,8 +30,9 @@ pub const Board32 = board_mod.Board32;
 pub const Move = move_mod.Move;
 pub const MoveList = move_mod.MoveList;
 
-/// Draughts rule variant. English is the default; Spanish adds flying kings,
-/// forward-only pawn captures, and the capture quantity/quality laws.
+/// Draughts rule variant. Spanish is the project default; English is the
+/// classic variant (Spanish adds flying kings, forward-only pawn captures,
+/// and the capture quantity/quality laws).
 /// Tags are explicit: 0/1 match the Spanish/English variant enum.
 pub const Variant = enum(u8) { english = 0, spanish = 1 };
 

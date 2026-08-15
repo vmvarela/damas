@@ -21,9 +21,10 @@ const Move = game_mod.Move;
 const VColor = vaxis.Color;
 const VStyle = vaxis.Style;
 
-// True-color palette matching the web UI: dark board, bright green pieces
-// and accents. White = solid bright-green discs, black = near-black discs
-// ringed in bright green (same as the web's filled vs outlined circles).
+// True-color palette in the same green-on-dark family as the web UI: dark
+// board, bright green pieces and accents. White = solid bright-green discs,
+// black = near-black discs ringed in bright green (same idea as the web's
+// filled vs outlined circles).
 const bg_dark = VColor{ .rgb = .{ 14, 33, 17 } }; // #0e2111 playable square
 const bg_light = VColor{ .rgb = .{ 18, 43, 22 } }; // #122b16 non-playable square
 const bg_selected = VColor{ .rgb = .{ 45, 105, 55 } }; // selected square
@@ -511,7 +512,8 @@ fn draw(state: *State, vx: *vaxis.Vaxis) void {
     }
 
     // Board of colored cells, no grid lines — the checkerboard comes from
-    // the alternating cell tones (matching the web). Pieces fill the whole
+    // the alternating cell tones (same green-on-dark family as the web).
+    // Pieces fill the whole
     // cell: terminal chars are ~2x taller than wide, so a full-width disc
     // of `cell_h` lines reads as a circle in pixels.
     const panel_w: usize = 24;

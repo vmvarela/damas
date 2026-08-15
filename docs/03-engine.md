@@ -19,7 +19,7 @@ The whole search lives in five small files:
 
 | File | LOC | Job |
 |------|-----|-----|
-| `src/core/engine/minimax.zig` | 293 | The search itself: negamax + alpha-beta, iterative deepening, move ordering, evaluation |
+| `src/core/engine/minimax.zig` | 633 | The search itself: negamax + alpha-beta, iterative deepening, move ordering, evaluation |
 | `src/core/engine/tt.zig` | 107 | Transposition table: remembers positions already searched |
 | `src/core/engine/zobrist.zig` | 74 | Hashes a board to a `u64` key for the table |
 | `src/core/engine/timer.zig` | 76 | Time limit that stops the search |
@@ -255,20 +255,35 @@ The sort runs before iterating the children
 #### Evaluation
 
 Leaves are scored from the side to move's perspective
-(`src/core/engine/minimax.zig:169-171`):
+(`src/core/engine/minimax.zig:313`):
 
 ```zig
 const MATE_SCORE: i32 = 100_000;
 const PAWN_VALUE: i32 = 100;
-const KING_VALUE: i32 = 300;
+const KING_VALUE: i32 = 300; // move ordering only; eval uses kingValue(variant)
 ```
-(`src/core/engine/minimax.zig:27-29`)
+(`src/core/engine/minimax.zig:28-30`)
 
-Material plus two positional terms:
+Material plus small positional terms (sum stays under ~1.2 pawns per side
+even on the opening, where the symmetric corner perros reach −123/side — so
+material still dominates pruning and TT score reuse):
 
+- **Variant-aware king value** — English king 300, Spanish (flying) king 500
+  (`kingValue`, `src/core/engine/minimax.zig:174-179`);
 - pawns get `+10` per row advanced past their start rows;
 - kings get `+5` toward the center columns (`centerBonus`,
-  `src/core/engine/minimax.zig:189-191`).
+  `src/core/engine/minimax.zig:351-353`);
+- `+40` promo bonus for a man on the penultimate row with an empty forward
+  landing — the "promotes next move" state (`promotionBonus`,
+  `src/core/engine/minimax.zig:262-272`; men are promoted on landing, so the
+  last row never holds one);
+- `−10` per edge man, `−50` extra for a true "perro" — an edge man with no
+  forward move and no capture available, capture rules variant-aware
+  (`structurePenalty`, `src/core/engine/minimax.zig:280-307`);
+- pseudo-mobility — `+3` per king empty destination, `+1` per man, counted by
+  piece color (`mobility`, `src/core/engine/minimax.zig:244-257`). Spanish
+  kings walk each ray to the first occupied square (cap 7); English kings and
+  men check one step via the comptime `ray_table` (`src/core/engine/minimax.zig:187-207`).
 
 `MATE_SCORE` is huge relative to material so that checkmate-now beats
 anything. Terminal positions return `-MATE_SCORE + ply` — earlier mates score
@@ -318,7 +333,7 @@ Didactically, each one is "what you sacrifice and when it would matter":
 |----------------|-----------|----------------------|
 | No quiescence search | **Horizon effect**: a capture just past the search depth is invisible; the engine may trade into a lost position one ply later | Sharp tactical positions with hanging pieces; strong engines extend search after captures |
 | TT overwrite-only | Lower TT hit rate; deep entries can be clobbered by shallow ones | Long searches where depth matters; a depth-preferred policy is the standard fix |
-| Material + 2 positional terms | No king-placement tables, no pawn-structure terms, no endgame knowledge | Balanced material positions where positional play decides |
+| Material + small positional terms | No king-placement tables, no endgame knowledge, no quiescence-aware eval | Balanced material positions where positional play decides |
 
 For a didactic engine this is the right line: each simplification has a named
 upgrade path, and the code stays readable.
@@ -366,8 +381,9 @@ Start at the public API and read inward:
 - `negamax` — the recursion: time check, terminal/eval, TT probe, move
   ordering, child loop with alpha-beta cut, TT store
   (`src/core/engine/minimax.zig:113-167`).
-- `evaluate` — material + row/center terms (`src/core/engine/minimax.zig:172-187`).
-- `orderMoves` / `moveScore` — MVV-LVA (`src/core/engine/minimax.zig:197-224`).
+- `evaluate` — material + positional terms (variant-aware king value,
+  mobility, promo bonus, edge/perro; `src/core/engine/minimax.zig:313-332`).
+- `orderMoves` / `moveScore` — MVV-LVA (`src/core/engine/minimax.zig:359-377`).
 - `tt.zig` — `TTEntry`, `TTFlag`, `init` (zeroed — garbage keys would alias
   real hashes), `get`, `put`, `clear` (`src/core/engine/tt.zig:13-59`).
 - `zobrist.zig` — comptime table generation and `hash`
@@ -389,9 +405,12 @@ zig-out/bin/damas       # config-driven match; edit config.json first
 ```
 
 Engine tests worth reading in `src/core/engine/minimax.zig`: forced capture
-found (`src/core/engine/minimax.zig:226-232`), determinism with a fresh TT
-(`src/core/engine/minimax.zig:243-250`), 1 ms time limit still returns a
-legal move (`src/core/engine/minimax.zig:252-262`).
+found (`src/core/engine/minimax.zig:388-394`), determinism with a fresh TT
+(`src/core/engine/minimax.zig:405-412`), 1 ms time limit still returns a
+legal move (`src/core/engine/minimax.zig:414-424`), and the evaluator suite:
+antisymmetry, mobility ordering, Spanish-vs-English king value, promo bonus,
+perro detection, positional-cap corpus, exact quiet-position regression, and
+a promotion-race tactical test (`src/core/engine/minimax.zig:474-632`).
 
 A minimax vs minimax match is the CI smoke test — it bounds the game with a
 timeout because the engine has no draw detection:

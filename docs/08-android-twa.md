@@ -175,6 +175,8 @@ the wrapper uses Gradle **8.11.1** (`gradle/wrapper/gradle-wrapper.properties:5`
    the local keystore (`base64 -i packaging/android/android-keystore | gh
    secret set ANDROID_KEYSTORE_B64`). The step now prints the actual
    certificate on failure (`android.yml:55-56`) so mismatches are debuggable.
+   Note `apksigner` prints the SHA-256 digest lowercase and without `:`
+   separators (`3624d458...`), so the step greps the colon-less form.
    The macOS SDK-path blocker is also fixed: the step uses
    `$ANDROID_HOME/build-tools/36.1.0/apksigner` (`android.yml:54`) and
    `build-tools;36.1.0` is installed explicitly (`android.yml:31`).

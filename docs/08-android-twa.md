@@ -168,18 +168,22 @@ the wrapper uses Gradle **8.11.1** (`gradle/wrapper/gradle-wrapper.properties:5`
 
 ## Known issues
 
-1. **The workflow has never run** (0 runs). The original blocker — a macOS
-   SDK path (`~/Library/Android/sdk`) in the "Verify signing fingerprint" step
-   on a Linux runner — is fixed: the step now uses
-   `$ANDROID_HOME/build-tools/36.1.0/apksigner` (`android.yml:54`), and
-   `build-tools;36.1.0` is installed explicitly (`android.yml:31`). The first
-   real execution may still surface environment issues — verify before
-   trusting CI output.
+1. **The fingerprint comes from the local keystore, not the secret.** On first
+   run the build succeeded but the "Verify signing fingerprint" step failed:
+   `ANDROID_KEYSTORE_B64` encoded a different (older) keystore than
+   `packaging/android/android-keystore`. Fixed by regenerating the secret from
+   the local keystore (`base64 -i packaging/android/android-keystore | gh
+   secret set ANDROID_KEYSTORE_B64`). The step now prints the actual
+   certificate on failure (`android.yml:55-56`) so mismatches are debuggable.
+   The macOS SDK-path blocker is also fixed: the step uses
+   `$ANDROID_HOME/build-tools/36.1.0/apksigner` (`android.yml:54`) and
+   `build-tools;36.1.0` is installed explicitly (`android.yml:31`).
 2. **The keystore is irreplaceable.** `android-keystore` is gitignored and only
    exists as a local file plus the CI secret. If it is lost, the same
    `applicationId` can never be updated: a new key changes the SHA-256
    fingerprint, which breaks `assetlinks.json` verification. Back it up off
-   repo and keep the secret safe.
+   repo and keep the secret safe. If the secret ever drifts from the local
+   keystore, the Verify step catches it before release.
 
 ## Try it
 

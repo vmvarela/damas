@@ -52,8 +52,8 @@ jobs:
       - name: Verify signing fingerprint
         run: |
           "$ANDROID_HOME/build-tools/36.1.0/apksigner" verify --print-certs packaging/android/app-release-signed.apk \
-            | grep -q "36:24:D4:58:66:48:B4:AE:C7:82:C1:24:21:BF:05:B4:40:22:D1:CD:6F:A9:40:6F:E6:C8:0D:19:9C:04:8F:3A" \
-            || { echo "Fingerprint de firma no coincide con assetlinks.json"; exit 1; }
+            | tee /tmp/damas-certs.txt | grep -q "36:24:D4:58:66:48:B4:AE:C7:82:C1:24:21:BF:05:B4:40:22:D1:CD:6F:A9:40:6F:E6:C8:0D:19:9C:04:8F:3A" \
+            || { cat /tmp/damas-certs.txt; echo "Fingerprint de firma no coincide con assetlinks.json"; exit 1; }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

@@ -15,3 +15,5 @@ python http.server needed):
 El bundle estático (`zig build web` → `zig-out/web/`) es una PWA instalable.
 En Chrome Android, abre la URL de GitHub Pages, menú ⋮ → **"Añadir a pantalla
 de inicio"**. Offline vía service worker (cache-first).
+
+En iPhone/iPad, abre la URL de GitHub Pages en Safari, toca Compartir → **"Añadir a pantalla de inicio"**. La app funciona offline (motor wasm + service worker); el botón LLM queda deshabilitado en modo offline.

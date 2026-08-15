@@ -44,6 +44,19 @@ jobs:
       - name: Build WASM web bundle
         run: zig build web -Doptimize=ReleaseSafe
 
+      - name: PWA meta tags present in index.html
+        shell: bash
+        run: |
+          for tag in apple-mobile-web-app-title apple-touch-icon; do
+            if ! grep -q "$tag" zig-out/web/index.html; then
+              echo "FAIL: missing $tag in zig-out/web/index.html"; exit 1
+            fi
+          done
+          if ! grep -q 'apple-mobile-web-app-status-bar-style" content="black-translucent"' zig-out/web/index.html; then
+            echo "FAIL: status-bar-style no es black-translucent"; exit 1
+          fi
+          echo "PASS: PWA meta tags present"
+
       - name: CLI smoke (minimax vs minimax)
         if: runner.os != 'Windows'
         shell: bash

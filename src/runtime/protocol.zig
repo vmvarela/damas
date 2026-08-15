@@ -62,6 +62,9 @@ pub fn handleMessage(
         if (root.get("rules")) |v| {
             if (v == .string) variant = variantFromString(v.string, default_rules);
         }
+        // The literal below resets position_history to null; free the map from
+        // the previous game first (it holds the repetition counts).
+        if (game.position_history) |*h| h.deinit();
         game.* = .{
             .board = board_mod.initialBoard(),
             .turn = .white,

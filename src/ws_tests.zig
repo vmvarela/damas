@@ -155,6 +155,34 @@ test "ws: make_move applies a legal move" {
     try std.testing.expectEqualSlices(u8, &board_mod.boardToAscii(expected.board), &state.value.board);
 }
 
+test "ws: new_game after a played move frees the position history" {
+    const allocator = std.testing.allocator;
+    var game = try game_mod.Game.init(allocator);
+    defer game.deinit();
+    var conn = protocol.ConnState{};
+
+    // A quiet move records a position and allocates the repetition history
+    // map; a subsequent new_game must free it, not drop it (leak).
+    const resp0 = try protocol.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\"}", .english);
+    defer allocator.free(resp0);
+
+    var moves = move_mod.MoveList{};
+    game.generateMoves(&moves);
+    const m = moves.slice()[0];
+    const body = try std.fmt.allocPrint(allocator, "{{\"action\":\"make_move\",\"from\":{d},\"to\":{d}}}", .{ m.from, m.to });
+    defer allocator.free(body);
+    const resp1 = try protocol.handleMessage(allocator, game, &conn, body, .english);
+    defer allocator.free(resp1);
+
+    const resp2 = try protocol.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\"}", .english);
+    defer allocator.free(resp2);
+    var state = try parseState(allocator, resp2);
+    defer state.deinit();
+
+    try std.testing.expect(state.value.@"error" == null);
+    try std.testing.expectEqual(board_mod.Color.white, state.value.turn);
+}
+
 test "ws: illegal make_move sets error and leaves the board unchanged" {
     const allocator = std.testing.allocator;
     var game = try game_mod.Game.init(allocator);

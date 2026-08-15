@@ -54,7 +54,7 @@ jobs:
             || { echo "Fingerprint de firma no coincide con assetlinks.json"; exit 1; }
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: damas-android
           path: |

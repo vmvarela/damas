@@ -36,7 +36,7 @@ jobs:
         run: zig build web -Doptimize=ReleaseSafe
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           # zig-out/web holds damas.wasm + index.html + style.css + app.js
           path: zig-out/web

@@ -1,6 +1,9 @@
 //! Transposition table for the search: fixed-size array indexed by
 //! `key & (size - 1)`, overwrite replacement (simplest policy; a two-tier
 //! or depth-preferred replacement could improve hit rate later).
+//!
+//! Keys must be non-zero: key 0 is the empty-slot marker. `zobrist.hash`
+//! enforces this by remapping 0 to 1, so all production keys satisfy it.
 
 const std = @import("std");
 const move_mod = @import("../move.zig");

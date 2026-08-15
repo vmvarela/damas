@@ -9,7 +9,7 @@ laws).
 One binary, four entry points:
 
 - `damas` — config-driven match (`config.json`: human | minimax | llm;
-  `"rules": "english" | "spanish"` selects the variant, default english)
+  `"rules": "english" | "spanish"` selects the variant, default spanish)
 - `damas web` — web UI + WebSocket server on `http://127.0.0.1:8080`
   (port from `DZ_WS_PORT`; `DZ_NO_BROWSER=1` skips opening the browser;
   rule variant selectable in the UI, sent with each new game)
@@ -20,6 +20,10 @@ One binary, four entry points:
 after the subcommand, e.g. `damas --rules spanish` or `damas tui --rules
 spanish`): it beats `config.json` in the match CLI and TUI, and sets the
 server's default variant for the web UI.
+
+## Documentation
+
+Learn the design, engine and LLM integration: [docs/](docs/README.md).
 
 Build: `zig build` (binaries in `zig-out/bin/`), tests: `zig build test`
 (requires Zig **0.16.0 release** — dev builds don't compile libvaxis).
@@ -63,7 +67,8 @@ Two ways to run the web UI:
 - **Embedded server** (default): `damas web` serves the UI + WebSocket on the
   loopback port. LLM play works (provider from `config.json` / env keys).
 - **Static/WASM**: `zig build web` produces `zig-out/web/` — `damas.wasm` plus
-  the three assets — which deploys to any static host (GitHub Pages, nginx,
+  the eight web assets (page, styles, script, manifest, service worker,
+  icons) — which deploys to any static host (GitHub Pages, nginx,
   `python3 -m http.server`). The page auto-detects the mode (HEAD probe on
   `damas.wasm`); `?server` / `?wasm` force a mode. In WASM mode the engine
   runs fully in-browser with **no backend**, and LLM play is disabled (no API
@@ -83,14 +88,16 @@ deb/rpm/apk via nfpm, WinGet, Scoop, Nix, and apt/rpm/apk repository
 dispatches.
 
 `.github/workflows/pages.yml` deploys the WASM bundle to GitHub Pages on every
-push to master (enable it: repo **Settings → Pages → Source: GitHub Actions**).
+push to master/main (enable it: repo **Settings → Pages → Source: GitHub
+Actions**).
 
-## Instalar como app (PWA)
+## Install as an app (PWA)
 
-El bundle WASM es una PWA instalable (manifest + service worker). En Chrome
-Android, abre la URL de GitHub Pages (p.ej. `https://vmvarela.github.io/damas/`),
-abre el menú ⋮ y elige **"Añadir a pantalla de inicio"**. Una vez instalada,
-la app funciona offline gracias al service worker (cache-first).
+The WASM bundle is an installable PWA (manifest + service worker). On Chrome
+Android, open the GitHub Pages URL (e.g. `https://vmvarela.github.io/damas/`),
+open the ⋮ menu and pick **"Add to Home screen"**; once installed, the app
+works offline thanks to the service worker (cache-first). iOS Safari: Share →
+"Add to Home Screen" (see [docs/09-ios-pwa.md](docs/09-ios-pwa.md)).
 
 ## Development
 

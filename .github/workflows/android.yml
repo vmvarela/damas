@@ -27,6 +27,8 @@ jobs:
       - name: Accept SDK licenses + configure bubblewrap
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          # Bubblewrap/verification need build-tools;36.1.0 — install it explicitly.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.1.0" >/dev/null
           # bubblewrap validatePath exige tools/ o bin/ en la raiz del SDK y
           # jdkPath con fichero "release" (JAVA_VERSION="17.0").
           ln -sfn "$ANDROID_HOME/cmdline-tools/latest/bin" "$ANDROID_HOME/bin"
@@ -49,7 +51,7 @@ jobs:
 
       - name: Verify signing fingerprint
         run: |
-          ~/Library/Android/sdk/build-tools/36.1.0/apksigner verify --print-certs packaging/android/app-release-signed.apk \
+          "$ANDROID_HOME/build-tools/36.1.0/apksigner" verify --print-certs packaging/android/app-release-signed.apk \
             | grep -q "36:24:D4:58:66:48:B4:AE:C7:82:C1:24:21:BF:05:B4:40:22:D1:CD:6F:A9:40:6F:E6:C8:0D:19:9C:04:8F:3A" \
             || { echo "Fingerprint de firma no coincide con assetlinks.json"; exit 1; }
 

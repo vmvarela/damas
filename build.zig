@@ -99,6 +99,19 @@ pub fn build(b: *std.Build) void {
     });
     if (native) test_step.dependOn(&b.addRunArtifact(ws_tests).step);
 
+    // WebSocket server process tests (browser-launch zombie reaping). Rooted
+    // at the repo root via a test anchor: server.zig's @embedFile of
+    // apps/web/* (through web_assets.zig) escapes a src/-rooted module — see
+    // damas_root.zig for the same constraint.
+    const server_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("server_tests_root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    if (native) test_step.dependOn(&b.addRunArtifact(server_tests).step);
+
     // WASM ABI tests (src/wasm_api.zig): the round-trip test runs natively;
     // the wasm32 branch of timer.zig (dz_now_ms) is never referenced here.
     const wasm_api_tests = b.addTest(.{

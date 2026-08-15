@@ -66,16 +66,75 @@ fn openBrowser(port: u16) void {
         .linux => "xdg-open",
         else => return,
     };
+    autoReapChildren();
     // global_single_threaded can't spawn (allocator is `.failing`), so build a
     // local Threaded with a real allocator and the process environ.
     const env = config_mod.processEnviron() orelse return;
     var threaded: std.Io.Threaded = .init(std.heap.page_allocator, .{ .environ = env });
     defer threaded.deinit();
-    // ponytail: no wait() — reaping would block the accept loop; the child may
-    // linger as a zombie until the server exits. Fine.
+    // ponytail: no wait() — reaping would block the accept loop; SIGCHLD is
+    // ignored (autoReapChildren above) so the kernel reaps the launcher for us.
     _ = std.process.spawn(threaded.io(), .{ .argv = &.{ launcher, url } }) catch {
         std.debug.print("Abriendo {s} en tu navegador\n", .{url});
     };
+}
+
+/// POSIX: ignore SIGCHLD so the kernel auto-reaps the fire-and-forget browser
+/// launcher. Comptime-pruned everywhere but macOS/Linux (SIG is `void` on
+/// Windows). Process-wide and permanent: do not add `Child.wait()` while this
+/// is set — std panics on the resulting ECHILD.
+fn autoReapChildren() void {
+    if (comptime builtin.os.tag != .macos and builtin.os.tag != .linux) return;
+    _ = std.posix.sigaction(std.posix.SIG.CHLD, &.{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    }, null);
+}
+
+test "server: browser-launch children are auto-reaped on POSIX" {
+    if (builtin.os.tag == .windows) return; // fix is POSIX-only
+    // Save the current disposition: the test must leave the process exactly
+    // as it found it (the server sets SIG_IGN once, for its whole lifetime).
+    var prev: std.posix.Sigaction = undefined;
+    std.posix.sigaction(std.posix.SIG.CHLD, null, &prev);
+    defer std.posix.sigaction(std.posix.SIG.CHLD, &prev, null);
+    autoReapChildren();
+
+    // Spawn fire-and-forget children the way openBrowser spawns the launcher.
+    var threaded: std.Io.Threaded = .init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var pids: [3]std.posix.pid_t = undefined;
+    for (&pids) |*pid| {
+        const child = try std.process.spawn(io, .{ .argv = &.{ "true" } });
+        pid.* = child.id.?;
+    }
+    // Give them time to exit; with SIGCHLD ignored the kernel reaps at exit.
+    try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(300), .boot);
+
+    // ps -o stat= prints one process-state row per pid; a zombie shows as Z.
+    // Auto-reaped children are gone from the table, so ps reports nothing.
+    // ponytail: ps + pipe read instead of waitpid — Child.wait() treats the
+    // ECHILD that SIG_IGN produces as a programmer bug and panics.
+    var argv_list: [8][]const u8 = undefined;
+    var pid_args: [3][16]u8 = undefined;
+    argv_list[0..4].* = .{ "ps", "-o", "stat=", "-p" };
+    var n: usize = 4;
+    for (pids, 0..) |pid, i| {
+        argv_list[n] = try std.fmt.bufPrint(&pid_args[i], "{d}", .{pid});
+        n += 1;
+    }
+    const ps = try std.process.spawn(io, .{
+        .argv = argv_list[0..n],
+        .stdout = .pipe,
+        .stderr = .ignore,
+    });
+    var out_buf: [4096]u8 = undefined;
+    var reader = ps.stdout.?.reader(io, &out_buf);
+    // readSliceShort returns < buffer.len iff EOF, so one call drains it.
+    const nread = try reader.interface.readSliceShort(&out_buf);
+    try std.testing.expect(std.mem.indexOfScalar(u8, out_buf[0..nread], 'Z') == null);
 }
 
 /// Serve one embedded asset or a 404. `writer` is the raw connection writer.

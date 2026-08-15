@@ -43,6 +43,9 @@ pub fn hash(board: Board32, turn: Color) u64 {
         if (p != .empty) h ^= table[sq][@intFromEnum(p)];
     }
     if (turn == .black) h ^= turn_hash;
+    // Key 0 is the TT empty-slot marker; never hand a position hash of 0 to
+    // the table (a rare XOR cancellation would otherwise be treated as a miss).
+    if (h == 0) h = 1;
     return h;
 }
 
@@ -50,6 +53,18 @@ test "hash is deterministic" {
     const board = board_mod.initialBoard();
     const h1 = hash(board, .white);
     try std.testing.expectEqual(h1, hash(board, .white));
+}
+
+test "hash never returns zero (TT empty marker)" {
+    // Empty board, white to move: XOR of nothing must not collide with the
+    // transposition table's empty-slot marker (key 0).
+    const empty = [_]Piece{.empty} ** 32;
+    try std.testing.expect(hash(empty, .white) != 0);
+    try std.testing.expect(hash(empty, .black) != 0);
+    // A few ordinary positions must stay non-zero too.
+    const b1 = board_mod.initialBoard();
+    try std.testing.expect(hash(b1, .white) != 0);
+    try std.testing.expect(hash(b1, .black) != 0);
 }
 
 test "different positions hash differently" {

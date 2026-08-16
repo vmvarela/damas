@@ -245,6 +245,30 @@ test "40-move rule: no capture or promotion for 80 plies is a draw" {
     try std.testing.expectEqual(@as(?Color, null), game.winner());
 }
 
+test "issue #28 board: white pawn blocked forward, capture landing occupied — zero moves, draw" {
+    // The exact issue #28 board (Spanish variant): white's only pawn at (2,0)
+    // has its forward square (3,1) occupied by a black king, and its only
+    // capture route (2,0)x(3,1)->(4,2) is blocked because the landing (4,2)
+    // holds a black pawn. White has pieces but zero legal moves -> stalemate
+    // -> draw, not a loss (game.zig winner() returns null).
+    var game = try Game.initRules(std.testing.allocator, .spanish);
+    defer game.deinit();
+    game.board = [_]Piece{.empty} ** 32;
+    game.board[board_mod.rowColToSquare(2, 0)] = .white_pawn;
+    game.board[board_mod.rowColToSquare(3, 1)] = .black_king;
+    game.board[board_mod.rowColToSquare(3, 7)] = .black_pawn;
+    game.board[board_mod.rowColToSquare(4, 2)] = .black_pawn;
+    game.board[board_mod.rowColToSquare(5, 7)] = .black_pawn;
+    game.board[board_mod.rowColToSquare(6, 4)] = .black_pawn;
+    game.turn = .white;
+
+    var moves = MoveList{};
+    game.generateMoves(&moves);
+    try std.testing.expectEqual(@as(usize, 0), moves.len);
+    try std.testing.expect(game.isGameOver());
+    try std.testing.expectEqual(@as(?Color, null), game.winner());
+}
+
 test "capture resets the halfmove clock" {
     var game = try Game.initRules(std.testing.allocator, .english);
     defer game.deinit();

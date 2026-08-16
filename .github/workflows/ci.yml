@@ -70,8 +70,9 @@ jobs:
           }
           EOF
           cd "$tmp"
-          # No draw detection in the engine: bound the match (timeout on Linux,
-          # perl alarm on macOS — `timeout` doesn't exist there).
+          # Engine has draw detection (stalemate, 80-ply clock, 3-fold); the
+          # timeout stays as a hard safety bound (timeout on Linux, perl alarm
+          # on macOS — `timeout` doesn't exist there).
           if command -v timeout > /dev/null 2>&1; then
             timeout 120 "$GITHUB_WORKSPACE/zig-out/bin/damas" < /dev/null > /tmp/dz-out.txt 2>&1 || true
           else

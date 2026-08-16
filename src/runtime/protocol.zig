@@ -156,7 +156,10 @@ pub fn handleMessage(
         // search thread forever; 0 means "no limit" in timer.zig, so floor
         // at 1ms to keep the deadline finite.
         const ms = @max(@min(fieldU32(root, "time_limit_ms") orelse 1000, 30_000), 1);
-        const result = minimax.search(game.board, game.turn, ms, allocator, game.rules) catch
+        const result = minimax.search(game.board, game.turn, ms, allocator, game.rules, .{
+            .halfmove_clock = game.halfmove_clock,
+            .history = if (game.position_history) |*h| h else null,
+        }) catch
             return stateJson(allocator, game, conn, "search failed");
         if (!game.applyMove(result.move))
             return stateJson(allocator, game, conn, "engine produced an illegal move");

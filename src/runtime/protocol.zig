@@ -144,6 +144,10 @@ pub fn handleMessage(
             };
             len += 1;
         }
+        // The 256-slot buffer is safe only while a single square can never
+        // produce more moves than the whole-board MoveList; fail loudly if a
+        // future generator change breaks that invariant.
+        std.debug.assert(len <= list.len);
         return legalMovesJson(allocator, game, conn, list[0..len]);
     }
 

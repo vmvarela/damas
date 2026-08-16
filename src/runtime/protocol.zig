@@ -83,16 +83,72 @@ pub fn handleMessage(
         var moves = move_mod.MoveList{};
         game.generateMoves(&moves);
         var found: ?move_mod.Move = null;
-        for (moves.slice()) |m| {
-            if (m.from == from and m.to == to) {
-                found = m;
-                break;
+        // Optional "captured" (u8 array, capture order) pins the exact chain:
+        // a multi-jump capture is one move, and several chains can share
+        // from/to while differing in the squares taken. Absent = old
+        // from/to-only matching (backward compat for TUI, LLM, older clients).
+        if (root.get("captured")) |cap| {
+            if (cap != .array) return stateJson(allocator, game, conn, "invalid captured");
+            var captured: [12]u8 = undefined;
+            if (cap.array.items.len > captured.len)
+                return stateJson(allocator, game, conn, "invalid captured");
+            for (cap.array.items, 0..) |item, i| {
+                if (item != .integer) return stateJson(allocator, game, conn, "invalid captured");
+                captured[i] = std.math.cast(u8, item.integer) orelse
+                    return stateJson(allocator, game, conn, "invalid captured");
+            }
+            const want = captured[0..cap.array.items.len];
+            for (moves.slice()) |m| {
+                if (m.from == from and m.to == to and m.num_captured == want.len and
+                    std.mem.eql(u8, m.captured[0..m.num_captured], want))
+                {
+                    found = m;
+                    break;
+                }
+            }
+        } else {
+            for (moves.slice()) |m| {
+                if (m.from == from and m.to == to) {
+                    found = m;
+                    break;
+                }
             }
         }
         const m = found orelse return stateJson(allocator, game, conn, "not a legal move");
         if (!game.applyMove(m)) return stateJson(allocator, game, conn, "not a legal move");
         conn.last_move = m;
         return stateJson(allocator, game, conn, null);
+    }
+
+    if (std.mem.eql(u8, action, "legal_moves")) {
+        const from = fieldU8(root, "from") orelse
+            return stateJson(allocator, game, conn, "invalid from");
+        var moves = move_mod.MoveList{};
+        game.generateMoves(&moves);
+        // Fixed buffer, same no-allocator style as MoveList; one square can
+        // never produce more moves than the whole board's 256-slot list.
+        var list: [256]LegalMove = undefined;
+        var len: usize = 0;
+        // Index into moves.items (not the loop copy): the captured slice must
+        // point at the MoveList's stable storage, or every entry would alias
+        // the loop-local `m` and end up with the last move's captured array.
+        const all = moves.slice();
+        for (all, 0..) |m, i| {
+            if (m.from != from) continue;
+            // A capture chain is one move: from = origin, to = final landing,
+            // captured = taken squares in order.
+            list[len] = .{
+                .from = m.from,
+                .to = m.to,
+                .captured = all[i].captured[0..m.num_captured],
+            };
+            len += 1;
+        }
+        // The 256-slot buffer is safe only while a single square can never
+        // produce more moves than the whole-board MoveList; fail loudly if a
+        // future generator change breaks that invariant.
+        std.debug.assert(len <= list.len);
+        return legalMovesJson(allocator, game, conn, list[0..len]);
     }
 
     if (std.mem.eql(u8, action, "compute_minimax")) {
@@ -145,6 +201,31 @@ fn getProvider(
 
 const LastMove = struct { from: u8, to: u8, captured: u8 };
 
+/// One legal move in a legal_moves response: origin, final landing square,
+/// and the captured squares in order (empty for a quiet move).
+const LegalMove = struct {
+    from: u8,
+    to: u8,
+    captured: []const u8,
+
+    /// Custom serialization: std.json encodes a []const u8 slice as a JSON
+    /// *string* ("" for empty, "\t\u0012" for [9,18]) — but the frontend
+    /// depends on `captured` being an array of numbers, which it echoes back
+    /// verbatim into make_move for the exact chain match.
+    pub fn jsonStringify(v: @This(), jws: anytype) !void {
+        try jws.beginObject();
+        try jws.objectField("from");
+        try jws.write(v.from);
+        try jws.objectField("to");
+        try jws.write(v.to);
+        try jws.objectField("captured");
+        try jws.beginArray();
+        for (v.captured) |sq| try jws.write(sq);
+        try jws.endArray();
+        try jws.endObject();
+    }
+};
+
 const StateResponse = struct {
     board: [64]u8,
     turn: board_mod.Color,
@@ -155,6 +236,23 @@ const StateResponse = struct {
     winner: ?board_mod.Color,
     last_move: ?LastMove,
     @"error": ?[]const u8, // `error` is a Zig keyword; @"" names the JSON field.
+};
+
+/// State envelope (same shape as StateResponse) plus the matching moves.
+/// Envelope asymmetry: the SUCCESS response carries a `moves` array; the
+/// ERROR path (invalid/missing from, unknown action, ...) returns the plain
+/// stateJson envelope with NO moves key. Also note the same field name with
+/// different types across envelopes: `last_move.captured` is a count (u8),
+/// while `moves[].captured` is the ordered square array.
+const LegalMovesResponse = struct {
+    board: [64]u8,
+    turn: board_mod.Color,
+    rules: game_mod.Variant,
+    over: bool,
+    winner: ?board_mod.Color,
+    last_move: ?LastMove,
+    @"error": ?[]const u8,
+    moves: []const LegalMove,
 };
 
 /// Full state JSON: `{"board":...,"turn":...,"over":...,"winner":...,"last_move":...,"error":...}`.
@@ -176,6 +274,33 @@ fn stateJson(
         .winner = game.winner(),
         .last_move = last_move,
         .@"error" = err,
+    };
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.print("{f}", .{std.json.fmt(resp, .{})});
+    return out.toOwnedSlice();
+}
+
+/// legal_moves response: the state envelope plus the moves matching `from`.
+fn legalMovesJson(
+    allocator: std.mem.Allocator,
+    game: *game_mod.Game,
+    conn: *ConnState,
+    moves: []const LegalMove,
+) ![]u8 {
+    const last_move: ?LastMove = if (conn.last_move) |m|
+        .{ .from = m.from, .to = m.to, .captured = m.num_captured }
+    else
+        null;
+    const resp = LegalMovesResponse{
+        .board = board_mod.boardToAscii(game.board),
+        .turn = game.turn,
+        .rules = game.rules,
+        .over = game.isGameOver(),
+        .winner = game.winner(),
+        .last_move = last_move,
+        .@"error" = null,
+        .moves = moves,
     };
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();

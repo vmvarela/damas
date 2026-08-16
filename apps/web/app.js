@@ -34,6 +34,11 @@
   let state = null;
   let moveHistory = [];
   let lastAction = null;
+  // Chain-input state (issue #24): legal_moves result for the selected piece,
+  // capture targets clicked so far, and the piece's display position mid-chain.
+  let legalMoves = null;
+  let clickedChain = [];
+  let chainPos = null;
 
   // Square index mapping, verified against src/core/board.zig:
   // - Dark squares satisfy (row + col) is even.
@@ -87,7 +92,7 @@
     ws.addEventListener('open', () => {
       setConnection('connected', 'servidor');
       moveHistory = [];
-      selectedSq = null;
+      clearChainState();
       setStatus('Reconnected — game reset.');
       // No explicit rules: the server applies its default (the --rules flag);
       // the first state response syncs the selector via handleState.
@@ -226,7 +231,7 @@
       // Variant enum: english = 0, spanish = 1.
       wasm.dz_init(rulesSelect.value === 'spanish' ? 1 : 0);
       moveHistory = [];
-      selectedSq = null;
+      clearChainState();
       setStatus('Engine loaded.');
       send({ action: 'new_game' });
     } catch (e) {
@@ -296,6 +301,10 @@
     }
 
     const board = state.board;
+    const inHand = legalMoves && clickedChain.length > 0 ? chainPos : null;
+    const captureTargets = legalMoves && selectedSq !== null ? nextCaptureTargets() : null;
+    const landingSet = legalMoves && selectedSq !== null ? landingTargets() : null;
+
     for (let row = 0; row < 8; row++) {
       for (let col = 0; col < 8; col++) {
         const cell = document.createElement('div');
@@ -315,14 +324,40 @@
           idxLabel.textContent = stdNum(sq);
           cell.appendChild(idxLabel);
 
-          if (classes) {
+          // While a chain is in progress the piece is "in hand" at chainPos,
+          // so its origin square renders empty and the piece renders at chainPos.
+          const isOrigin = sq === selectedSq && inHand !== null;
+          if (classes && !isOrigin) {
             const piece = document.createElement('div');
             piece.className = classes.join(' ');
             piece.setAttribute('role', 'img');
             piece.setAttribute('aria-label', describePiece(ch));
-            if (sq === selectedSq) piece.classList.add('selected');
+            if (sq === selectedSq || (inHand !== null && sq === inHand)) {
+              piece.classList.add('selected');
+            }
             piece.textContent = pieceGlyph(ch);
             cell.appendChild(piece);
+          }
+          if (inHand !== null && sq === inHand) {
+            const rc0 = sqToRowCol(selectedSq);
+            const ch0 = board[rc0.row * 8 + rc0.col];
+            const pc = pieceClass(ch0);
+            if (pc) {
+              const piece = document.createElement('div');
+              piece.className = pc.join(' ') + ' selected';
+              piece.setAttribute('role', 'img');
+              piece.setAttribute('aria-label', describePiece(ch0));
+              piece.textContent = pieceGlyph(ch0);
+              cell.appendChild(piece);
+            }
+          }
+
+          if (captureTargets !== null && captureTargets.has(sq) && sq !== inHand) {
+            cell.classList.add('capture-target');
+            cell.setAttribute('aria-label', 'capture target');
+          } else if (landingSet !== null && landingSet.has(sq) && sq !== inHand) {
+            cell.classList.add('legal-target');
+            cell.setAttribute('aria-label', 'landing square');
           }
 
           cell.addEventListener('click', () => onCellClick(row, col));
@@ -355,29 +390,143 @@
     const ch = state.board[row * 8 + col];
     const owner = pieceOwner(ch);
 
-    if (selectedSq === null || (owner && owner === state.turn && selectedSq !== sq)) {
-      if (owner && owner === state.turn) {
-        selectedSq = sq;
-        renderBoard();
-        const rc = sqToRowCol(sq);
-        setStatus(`Selected square ${sq} (${rc.row},${rc.col}). Click a target square.`);
-      }
+    // No selection yet: only pieces of the side to move can be picked.
+    if (selectedSq === null) {
+      if (owner && owner === state.turn) selectPiece(sq);
       return;
     }
 
+    // Clicking the selected square again deselects.
     if (selectedSq === sq) {
-      selectedSq = null;
-      renderBoard();
+      clearSelection();
       return;
     }
 
-    // A piece is already selected; any other dark-square click becomes the target.
-    const fromSq = selectedSq;
-    selectedSq = null;
+    // Clicking another own piece re-selects it.
+    if (owner && owner === state.turn) {
+      selectPiece(sq);
+      return;
+    }
+
+    // With legal moves known, only highlighted squares are actionable.
+    if (legalMoves) {
+      // Next capture target: advance the chain.
+      if (nextCaptureTargets().has(sq)) {
+        chainPos = displayLanding(chainPos === null ? selectedSq : chainPos, sq);
+        clickedChain.push(sq);
+        renderBoard();
+        setStatus(chainHint());
+        return;
+      }
+      // Final landing: submit the move (full captured chain, exact match).
+      if (isLanding(sq)) {
+        submitMove(sq);
+        return;
+      }
+    }
+
+    // Any other square clears the selection instead of a blind make_move.
+    clearSelection();
+  }
+
+  function selectPiece(sq) {
+    selectedSq = sq;
+    legalMoves = null;
+    clickedChain = [];
+    chainPos = null;
     renderBoard();
+    setStatus('Checking legal moves…');
+    setBusy(true);
+    lastAction = 'legal_moves';
+    send({ action: 'legal_moves', from: sq });
+  }
+
+  function clearChainState() {
+    selectedSq = null;
+    legalMoves = null;
+    clickedChain = [];
+    chainPos = null;
+  }
+
+  function clearSelection() {
+    clearChainState();
+    renderBoard();
+  }
+
+  // Candidates = legal moves whose captured sequence matches the clicks so far.
+  function candidates() {
+    const chain = clickedChain;
+    return (legalMoves || []).filter(
+      (m) =>
+        m.captured.length >= chain.length &&
+        chain.every((s, i) => m.captured[i] === s)
+    );
+  }
+
+  // Squares that must be clicked next to continue a capture chain.
+  function nextCaptureTargets() {
+    const n = clickedChain.length;
+    const set = new Set();
+    for (const m of candidates()) {
+      if (m.captured.length > n) set.add(m.captured[n]);
+    }
+    return set;
+  }
+
+  function landingTargets() {
+    const set = new Set();
+    for (const m of candidates()) set.add(m.to);
+    return set;
+  }
+
+  function isLanding(sq) {
+    return candidates().some((m) => m.to === sq);
+  }
+
+  // Display-only landing for a capture hop, computed in row/col space: the
+  // first free square beyond the captured piece in the jump direction. Exact
+  // for short jumps; nearest-free approximation for Spanish flying kings
+  // (index-space arithmetic is NOT affine along diagonals — deltas alternate
+  // +5/+4 — so it must be done on row/col). The real chain is validated on
+  // submit via {from, to, captured}, so the display position is cosmetic.
+  function displayLanding(prevPos, target) {
+    const rc0 = sqToRowCol(prevPos);
+    const rcT = sqToRowCol(target);
+    const dr = Math.sign(rcT.row - rc0.row);
+    const dc = Math.sign(rcT.col - rc0.col);
+    const board = state.board;
+    let r = rcT.row + dr;
+    let c = rcT.col + dc;
+    while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      if (isDark(r, c) && board[r * 8 + c] === '.') return rowColToSq(r, c);
+      r += dr;
+      c += dc;
+    }
+    return target;
+  }
+
+  function submitMove(to) {
+    const from = selectedSq;
+    // Prefer the candidate's full captured list so the backend gets an exact
+    // chain match even when the player clicked the landing directly. cand is
+    // always found: isLanding and submitMove use the same synchronous
+    // candidates().
+    const cand = candidates().find((m) => m.to === to);
+    const captured = cand.captured.slice();
+    clearSelection();
     setBusy(true);
     lastAction = 'make_move';
-    send({ action: 'make_move', from: fromSq, to: sq });
+    send({ action: 'make_move', from, to, captured });
+  }
+
+  function chainHint() {
+    if (clickedChain.length) {
+      return 'Continue the capture — click the marked pieces, then the landing.';
+    }
+    if (candidates().some((m) => m.captured.length > 0)) {
+      return 'Capture required — click the marked enemy pieces, then the landing square.';
+    }
+    return 'Select a landing square.';
   }
 
   function renderTurn() {
@@ -399,7 +548,7 @@
       const li = document.createElement('li');
       li.textContent = `${mv.turn}: ${stdNum(mv.from)}${mv.captured ? 'x' : '-'}${stdNum(mv.to)}`;
       li.addEventListener('click', () => {
-        selectedSq = null;
+        clearChainState();
         highlightMove(mv);
       });
       historyEl.appendChild(li);
@@ -438,19 +587,31 @@
 
   function handleState(msg) {
     setBusy(false);
-    const wasHumanMove = lastAction === 'make_move';
+    const action = lastAction;
+    const wasHumanMove = action === 'make_move';
+    const wasLegalMoves = action === 'legal_moves';
     lastAction = null;
 
     if (msg.error) {
+      if (wasLegalMoves) clearSelection();
       setStatus(msg.error, true);
       return;
     }
+
+    // Engine/LLM responses (compute_minimax, request_llm) arrive on a new
+    // board — drop any stale selection/highlights so the player cannot submit
+    // a move the backend will reject. make_move/new_game paths already clear.
+    if (!wasLegalMoves) clearChainState();
 
     state = msg;
 
     // Reflect the server's effective variant (covers a server that rejected an invalid value).
     // Changing the select mid-game is fine — it applies on the next new_game, no auto-restart.
     if (msg.rules) rulesSelect.value = msg.rules;
+
+    // legal_moves responses carry the move list in the same envelope; the
+    // error path above has no `moves` key, so it is checked first.
+    if (wasLegalMoves) legalMoves = msg.moves || [];
 
     if (msg.last_move && (msg.last_move.from !== undefined && msg.last_move.to !== undefined)) {
       const last = msg.last_move;
@@ -474,6 +635,11 @@
       return;
     }
 
+    if (wasLegalMoves) {
+      setStatus(legalMoves.length === 0 ? 'No legal moves for this piece.' : chainHint());
+      return;
+    }
+
     setStatus(`${msg.turn} to move.`);
 
     // Auto-play opponent after a successful human move.
@@ -489,7 +655,7 @@
   btnNew.addEventListener('click', () => {
     if (!state || busy) return;
     moveHistory = [];
-    selectedSq = null;
+    clearChainState();
     setBusy(true);
     send({ action: 'new_game', rules: rulesSelect.value });
   });
@@ -523,8 +689,7 @@
       if (pieceOwner(ch) === state.turn) pieces.push(sq);
     }
     if (pieces[num - 1] !== undefined) {
-      selectedSq = pieces[num - 1];
-      renderBoard();
+      selectPiece(pieces[num - 1]);
       const rc = sqToRowCol(selectedSq);
       const cell = boardEl.querySelector(`.cell[data-row="${rc.row}"][data-col="${rc.col}"]`);
       if (cell) cell.focus();

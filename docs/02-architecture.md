@@ -149,8 +149,8 @@ The module root is `damas_root.zig`, which is just a forwarding main:
 ### 2. Pure protocol, reused by server and WASM
 
 `src/runtime/protocol.zig` implements the whole game protocol — `new_game`,
-`make_move`, `compute_minimax`, `request_llm` — with no I/O. Its header says
-it outright:
+`make_move`, `legal_moves`, `compute_minimax`, `request_llm` — with no I/O.
+Its header says it outright:
 
 ```zig
 //! No sockets, no HTTP, no provider factory: the transport layer feeds
@@ -168,6 +168,13 @@ it outright:
 - The WASM build imports the same module (`src/wasm_api.zig:10`) and leaves
   `build_provider` null, so `request_llm` answers "LLM provider unavailable"
   (`src/wasm_api.zig:5-6`, `src/wasm_api.zig:35`).
+
+`legal_moves` returns the state envelope plus `moves: [{from, to, captured}]`
+for one origin square — the exact multi-jump chains the web UI steps through.
+`make_move` accepts an optional order-sensitive `captured[]` and exact-matches
+the full chain (absent → old `from`/`to` fallback, backward compatible). Note
+the same-name/different-type asymmetry: `last_move.captured` is a u8 count,
+`moves[].captured` is an array of squares.
 
 ### 3. Testability
 

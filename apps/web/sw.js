@@ -1,4 +1,4 @@
-const CACHE = 'damas-v2';
+const CACHE = 'damas-v3';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -29,8 +29,14 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Shell (HTML/CSS/JS): stale-while-revalidate — fresh updates without manual cache bumps
-  if (request.mode === 'navigate' || url.pathname.endsWith('.css') || url.pathname.endsWith('.js')) {
+  // Shell (HTML/CSS/JS) + wasm: stale-while-revalidate — fresh updates without manual cache bumps,
+  // and no drift between app.js and the engine binary after protocol changes (issue #30).
+  if (
+    request.mode === 'navigate' ||
+    url.pathname.endsWith('.css') ||
+    url.pathname.endsWith('.js') ||
+    url.pathname.endsWith('.wasm')
+  ) {
     event.respondWith(
       caches.match(request).then((cached) => {
         const network = fetch(request)
@@ -48,7 +54,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else (wasm, icons, manifest): cache-first
+  // Everything else (icons, manifest): cache-first
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

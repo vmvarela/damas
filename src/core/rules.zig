@@ -4,8 +4,9 @@
 //! - English: captures are mandatory; if any exist, only capture moves are
 //!   generated. Multi-jump chains are generated fully — each Move in the list
 //!   is one complete chain (start square, final landing square, all captured
-//!   squares in order). Pawns capture forward and backward. Kings are
-//!   non-flying: one square per step. A pawn that lands on the last row is
+//!   squares in order). Pawns move and capture forward only. Kings move and
+//!   capture in any of the four diagonal directions, non-flying (one square
+//!   per step). A pawn that lands on the last row is
 //!   promoted, and the move ends there.
 //! - Spanish (damas españolas): pawns capture forward only. Kings are flying:
 //!   they move any distance along a diagonal, and capture by sliding to the
@@ -31,8 +32,8 @@ pub const Move = move_mod.Move;
 pub const MoveList = move_mod.MoveList;
 
 /// Draughts rule variant. Spanish is the project default; English is the
-/// classic variant (Spanish adds flying kings, forward-only pawn captures,
-/// and the capture quantity/quality laws).
+/// classic variant (Spanish adds flying kings and the capture
+/// quantity/quality laws).
 /// Tags are explicit: 0/1 match the Spanish/English variant enum.
 pub const Variant = enum(u8) { english = 0, spanish = 1 };
 
@@ -61,15 +62,15 @@ fn pieceDirs(piece: Piece) []const Dir {
     };
 }
 
-/// Capture direction set. English pawns capture in all four directions
-/// (backward included); Spanish pawns capture forward only (Spanish kings
-/// are handled by flyCaptures and never reach here).
+/// Capture direction set. Pawns capture forward only in both variants; kings
+/// capture in any of the four non-flying diagonal directions. Spanish kings
+/// never reach here (handled by flyCaptures).
 fn captureDirs(piece: Piece, variant: Variant) []const Dir {
-    return switch (variant) {
-        .english => &king_dirs,
-        .spanish => switch (piece) {
-            .white_pawn, .black_pawn => pieceDirs(piece),
-            else => unreachable, // Spanish kings go through flyCaptures
+    return switch (piece) {
+        .white_pawn, .black_pawn => pieceDirs(piece),
+        else => switch (variant) {
+            .english => &king_dirs,
+            .spanish => unreachable, // Spanish kings go through flyCaptures
         },
     };
 }
@@ -459,26 +460,77 @@ test "isLegalMove accepts legal and rejects illegal moves" {
     try std.testing.expect(!isLegalMove(board, .white, own_jump, .english));
 }
 
-test "spanish: pawn does not capture backward" {
+test "pawn does not capture backward (both variants)" {
     var board: Board32 = [_]Piece{.empty} ** 32;
     board[rowColToSquare(3, 3)] = .white_pawn;
     board[rowColToSquare(2, 2)] = .black_pawn; // behind white's forward direction
 
-    // English pawns capture backward: (3,3) -> (1,1) over (2,2).
+    // Pawns capture forward only in both variants: no backward capture to
+    // (1,1) over (2,2) — just the two forward quiet moves, both landing on
+    // row 4 (a backward regression would land on row 1).
     var english = MoveList{};
     generateMoves(board, .white, &english, .english);
-    try std.testing.expectEqual(@as(usize, 1), english.len);
-    try std.testing.expect(isCapture(english.slice()[0]));
-    try std.testing.expectEqual(rowColToSquare(1, 1), english.slice()[0].to);
+    try std.testing.expectEqual(@as(usize, 2), english.len);
+    for (english.slice()) |m| {
+        try std.testing.expect(!isCapture(m));
+        try std.testing.expect(squareToRowCol(m.to).row > 3);
+    }
 
-    // Spanish pawns capture forward only: no capture, just the two forward
-    // quiet moves, none landing on row 2.
     var spanish = MoveList{};
     generateMoves(board, .white, &spanish, .spanish);
     try std.testing.expectEqual(@as(usize, 2), spanish.len);
     for (spanish.slice()) |m| {
         try std.testing.expect(!isCapture(m));
-        try std.testing.expect(squareToRowCol(m.to).row != 2);
+        try std.testing.expect(squareToRowCol(m.to).row > 3);
+    }
+}
+
+test "english: king captures backward" {
+    var kboard: Board32 = [_]Piece{.empty} ** 32;
+    kboard[rowColToSquare(3, 3)] = .white_king;
+    kboard[rowColToSquare(2, 2)] = .black_pawn;
+    var king_moves = MoveList{};
+    generateMoves(kboard, .white, &king_moves, .english);
+    try std.testing.expectEqual(@as(usize, 1), king_moves.len); // mandatory capture only
+    const m = king_moves.slice()[0];
+    try std.testing.expect(isCapture(m));
+    try std.testing.expectEqual(rowColToSquare(1, 1), m.to);
+    try std.testing.expectEqual(rowColToSquare(2, 2), m.captured[0]);
+}
+
+test "english: pawn in a chain captures forward only" {
+    // WP(3,3), BP(4,4), BP(4,6). The pawn captures (4,4) landing on (5,5)
+    // and must NOT continue on to (4,6): that would be a backward capture,
+    // which English pawns never make (the pre-fix code continued chains with
+    // all four directions, ending at (3,7) with 2 captures).
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[rowColToSquare(3, 3)] = .white_pawn;
+    board[rowColToSquare(4, 4)] = .black_pawn;
+    board[rowColToSquare(4, 6)] = .black_pawn;
+
+    var moves = MoveList{};
+    generateMoves(board, .white, &moves, .english);
+    try std.testing.expectEqual(@as(usize, 1), moves.len);
+    const m = moves.slice()[0];
+    try std.testing.expectEqual(rowColToSquare(5, 5), m.to);
+    try std.testing.expectEqual(@as(u8, 1), m.num_captured);
+    try std.testing.expectEqual(rowColToSquare(4, 4), m.captured[0]);
+}
+
+test "black pawn does not capture backward" {
+    // BP(3,3), WP(4,4) behind black's forward direction (black moves up,
+    // row -1). Expect the 2 forward quiet moves to row 2; a backward
+    // capture regression would land on (5,5), row 5.
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[rowColToSquare(3, 3)] = .black_pawn;
+    board[rowColToSquare(4, 4)] = .white_pawn;
+
+    var moves = MoveList{};
+    generateMoves(board, .black, &moves, .english);
+    try std.testing.expectEqual(@as(usize, 2), moves.len);
+    for (moves.slice()) |m| {
+        try std.testing.expect(!isCapture(m));
+        try std.testing.expect(squareToRowCol(m.to).row == 2); // forward only, never row 5
     }
 }
 

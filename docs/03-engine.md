@@ -49,7 +49,7 @@ var b2 = board;
 rules.applyMove(&b2, m);
 const score = -negamax(b2, board_mod.opponent(turn), depth - 1, -beta, -alpha, ply + 1, ctx);
 ```
-(`src/core/engine/minimax.zig:148-150`)
+(`src/core/engine/minimax.zig:151-153`)
 
 32 bytes per copy is cheap enough that no move-undo bookkeeping is needed.
 The header states the design outright: "Board copies (32 bytes) are used for
@@ -61,25 +61,25 @@ The opening position — 12 white pawns on rows 0–2, 12 black pawns on rows
 ### Move generation and the two rule variants
 
 The rules layer generates the legal moves for a position:
-`rules.generateMoves` (`src/core/rules.zig:262`). Two details matter for the
+`rules.generateMoves` (`src/core/rules.zig:263`). Two details matter for the
 engine:
 
 - **Captures are mandatory.** If any capture exists, only capture moves are
   generated. This is what makes the tactical side of the game sharp.
 - **Each `Move` is a complete chain.** A multi-jump is one move: start square,
   final landing square, and the captured squares in order
-  (`src/core/rules.zig:4-7`). The engine reasons about one chain as one
+  (`src/core/rules.zig:5-6`). The engine reasons about one chain as one
   choice — it never re-searches the intermediate squares.
 
 The variants differ in the capture rules (`src/core/rules.zig:4-21`):
 
-- **English** — pawns capture forward and backward; kings are non-flying (one
-  square per step).
+- **English** — pawns move and capture forward only; kings are non-flying (one
+  square per step in any direction).
 - **Spanish** — pawns capture forward only; kings are **flying** (slide any
   distance). Among all capture chains, keep only those capturing the most
   pieces (ley de la cantidad), and among those the ones capturing the most
   kings (ley de la calidad). This filtering lives in `applyCaptureLaws`
-  (`src/core/rules.zig:203`).
+  (`src/core/rules.zig:204`).
 
 ### The algorithm, from zero
 
@@ -110,10 +110,10 @@ negated:
 ```zig
 const score = -negamax(b2, board_mod.opponent(turn), depth - 1, -beta, -alpha, ply + 1, ctx);
 ```
-(`src/core/engine/minimax.zig:150`)
+(`src/core/engine/minimax.zig:153`)
 
 One evaluation function, alternating signs — no max/min switch per level
-(`src/core/engine/minimax.zig:172-187`).
+(`src/core/engine/minimax.zig:303-320`).
 
 #### Alpha-beta pruning
 
@@ -130,11 +130,11 @@ If `alpha >= beta`, the node can't influence the result; cut the branch:
 if (score > alpha) alpha = score;
 if (alpha >= beta) break;
 ```
-(`src/core/engine/minimax.zig:156-157`)
+(`src/core/engine/minimax.zig:159-160`)
 
 The cut is exact — the same move is chosen as without pruning, just faster.
 The bound passes down through the recursion as `(-beta, -alpha)`
-(`src/core/engine/minimax.zig:150`):
+(`src/core/engine/minimax.zig:153`):
 
 ```mermaid
 flowchart TB
@@ -160,19 +160,19 @@ while (depth <= MAX_DEPTH) : (depth += 1) {
     ...
 }
 ```
-(`src/core/engine/minimax.zig:62-71`)
+(`src/core/engine/minimax.zig:66-74`)
 
 Why not just search to the deepest depth once?
 
 1. **Time budget.** A fixed depth might take 10 ms or 10 seconds depending on
    the position. With iterative deepening you always have the previous
    depth's answer when the timer fires — "best move from the deepest
-   completed iteration" (`src/core/engine/minimax.zig:47-49`).
+    completed iteration" (`src/core/engine/minimax.zig:48-49`).
 2. **TT warmup.** Shallower iterations fill the transposition table with
    scores and — crucially — with the best move per position, which deep
    iterations reuse for move ordering.
 
-`MAX_DEPTH` caps the ladder at 24 (`src/core/engine/minimax.zig:26`). A search
+`MAX_DEPTH` caps the ladder at 24 (`src/core/engine/minimax.zig:27`). A search
 that deep is rarely reached; the timer usually fires first.
 
 #### Transposition table
@@ -193,8 +193,8 @@ The three flags encode what the stored score means:
 - `upper_bound` — similarly cut; the true score is **at most** this.
 
 The probe uses the flag to tighten bounds or return early
-(`src/core/engine/minimax.zig:130-141`). The stored move also seeds move
-ordering (`src/core/engine/minimax.zig:143`).
+(`src/core/engine/minimax.zig:133-144`). The stored move also seeds move
+ordering (`src/core/engine/minimax.zig:146`).
 
 **Simplification accepted:** replacement is overwrite-only. A new entry simply
 replaces whatever sits in its slot — no depth preference, no two-tier scheme.
@@ -242,20 +242,20 @@ Pruning is only as good as the move order: the sooner a branch is proven
 worse than `alpha`, the sooner it's cut. The heuristic is:
 
 1. **TT move first** — the last known best move for this position gets a huge
-   score (`src/core/engine/minimax.zig:207-209`).
+   score (`src/core/engine/minimax.zig:359-361`).
 2. **Captures by MVV-LVA** — Most Valuable Victim, Least Valuable Attacker:
    capture the strongest piece with the weakest piece first
-   (`src/core/engine/minimax.zig:210-214`): `victim * 10 - attacker`
-   (`src/core/engine/minimax.zig:213`).
-3. **Quiet moves last** — score 0 (`src/core/engine/minimax.zig:215`).
+   (`src/core/engine/minimax.zig:362-366`): `victim * 10 - attacker`
+   (`src/core/engine/minimax.zig:365`).
+3. **Quiet moves last** — score 0 (`src/core/engine/minimax.zig:367`).
 
 The sort runs before iterating the children
-(`src/core/engine/minimax.zig:143`, `orderMoves` at 197-200).
+(`src/core/engine/minimax.zig:146`, `orderMoves` at 349-353).
 
 #### Evaluation
 
 Leaves are scored from the side to move's perspective
-(`src/core/engine/minimax.zig:313`):
+(`src/core/engine/minimax.zig:303`):
 
 ```zig
 const MATE_SCORE: i32 = 100_000;
@@ -272,22 +272,23 @@ material still dominates pruning and TT score reuse):
   (`kingValue`, `src/core/engine/minimax.zig:174-179`);
 - pawns get `+10` per row advanced past their start rows;
 - kings get `+5` toward the center columns (`centerBonus`,
-  `src/core/engine/minimax.zig:351-353`);
+  `src/core/engine/minimax.zig:341-343`);
 - `+40` promo bonus for a man on the penultimate row with an empty forward
   landing — the "promotes next move" state (`promotionBonus`,
-  `src/core/engine/minimax.zig:262-272`; men are promoted on landing, so the
+  `src/core/engine/minimax.zig:262-267`; men are promoted on landing, so the
   last row never holds one);
 - `−10` per edge man, `−50` extra for a true "perro" — an edge man with no
-  forward move and no capture available, capture rules variant-aware
-  (`structurePenalty`, `src/core/engine/minimax.zig:280-307`);
+  forward move and no capture available. Pawns capture forward only in both
+  variants, so the check is variant-independent (`structurePenalty`,
+  `src/core/engine/minimax.zig:276-298`);
 - pseudo-mobility — `+3` per king empty destination, `+1` per man, counted by
-  piece color (`mobility`, `src/core/engine/minimax.zig:244-257`). Spanish
+  piece color (`mobility`, `src/core/engine/minimax.zig:245-258`). Spanish
   kings walk each ray to the first occupied square (cap 7); English kings and
-  men check one step via the comptime `ray_table` (`src/core/engine/minimax.zig:187-207`).
+  men check one step via the comptime `ray_table` (`src/core/engine/minimax.zig:188-208`).
 
 `MATE_SCORE` is huge relative to material so that checkmate-now beats
 anything. Terminal positions return `-MATE_SCORE + ply` — earlier mates score
-better (`src/core/engine/minimax.zig:127`).
+better (`src/core/engine/minimax.zig:130`).
 
 #### Time limit
 
@@ -306,10 +307,10 @@ pub fn init(time_limit_ms: u32) Timer {
 
 The search checks the clock every 1024 nodes, not every node —
 `clock_gettime` per node was the dominant cost in million-node searches
-(`src/core/engine/minimax.zig:115-121`). Worst-case abort delay is ~tens of
+(`src/core/engine/minimax.zig:118-124`). Worst-case abort delay is ~tens of
 microseconds — negligible against a real budget. On expiry, `ctx.aborted` is
 set and the recursion unwinds returning 0 (scores discarded); the caller
-keeps the last completed depth's move (`src/core/engine/minimax.zig:63-72`).
+keeps the last completed depth's move (`src/core/engine/minimax.zig:71-74`).
 
 The clock has no OS on `wasm32-freestanding`: the JS host injects
 `performance.now` via an `extern "env"` import, `dz_now_ms`
@@ -372,18 +373,18 @@ Three runtimes call `minimax.search`:
 Start at the public API and read inward:
 
 - `minimax.search` — time-limited entry: builds a fresh 64K-entry TT
-  (`1 << 16`, `src/core/engine/minimax.zig:51`), runs the ID loop, returns the deepest
-  completed result (`src/core/engine/minimax.zig:50-73`).
+  (`1 << 16`, `src/core/engine/minimax.zig:54`), runs the ID loop, returns the deepest
+  completed result (`src/core/engine/minimax.zig:51-76`).
 - `minimax.searchDepth` — fixed-depth variant for tests, no time limit
-  (`src/core/engine/minimax.zig:76-88`).
+  (`src/core/engine/minimax.zig:79-91`).
 - `rootSearch` — iterates root moves, tracks the best, stores it in
-  `ctx.root_best` (`src/core/engine/minimax.zig:91-111`).
+  `ctx.root_best` (`src/core/engine/minimax.zig:94-114`).
 - `negamax` — the recursion: time check, terminal/eval, TT probe, move
   ordering, child loop with alpha-beta cut, TT store
-  (`src/core/engine/minimax.zig:113-167`).
+  (`src/core/engine/minimax.zig:116-170`).
 - `evaluate` — material + positional terms (variant-aware king value,
-  mobility, promo bonus, edge/perro; `src/core/engine/minimax.zig:313-332`).
-- `orderMoves` / `moveScore` — MVV-LVA (`src/core/engine/minimax.zig:359-377`).
+  mobility, promo bonus, edge/perro; `src/core/engine/minimax.zig:303-320`).
+- `orderMoves` / `moveScore` — MVV-LVA (`src/core/engine/minimax.zig:349-368`).
 - `tt.zig` — `TTEntry`, `TTFlag`, `init` (zeroed — garbage keys would alias
   real hashes), `get`, `put`, `clear` (`src/core/engine/tt.zig:13-59`).
 - `zobrist.zig` — comptime table generation and `hash`
@@ -405,12 +406,12 @@ zig-out/bin/damas       # config-driven match; edit config.json first
 ```
 
 Engine tests worth reading in `src/core/engine/minimax.zig`: forced capture
-found (`src/core/engine/minimax.zig:388-394`), determinism with a fresh TT
-(`src/core/engine/minimax.zig:405-412`), 1 ms time limit still returns a
-legal move (`src/core/engine/minimax.zig:414-424`), and the evaluator suite:
+found (`src/core/engine/minimax.zig:378-384`), determinism with a fresh TT
+(`src/core/engine/minimax.zig:395-402`), 1 ms time limit still returns a
+legal move (`src/core/engine/minimax.zig:404-414`), and the evaluator suite:
 antisymmetry, mobility ordering, Spanish-vs-English king value, promo bonus,
 perro detection, positional-cap corpus, exact quiet-position regression, and
-a promotion-race tactical test (`src/core/engine/minimax.zig:474-632`).
+a promotion-race tactical test (`src/core/engine/minimax.zig:464-635`).
 
 A minimax vs minimax match is the CI smoke test — it bounds the game with a
 timeout because the engine has no draw detection:

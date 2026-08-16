@@ -8,65 +8,55 @@ template: |
   **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
 
 autolabeler:
-  - label: "type:feature"
+  - label: "enhancement"
     title:
       - "/^feat(\\(.+\\))?:/i"
-  - label: "type:bug"
+  - label: "bug"
     title:
       - "/^fix(\\(.+\\))?:/i"
-  - label: "type:chore"
+  - label: "github_actions"
     title:
       - "/^chore(\\(.+\\))?:/i"
       - "/^ci(\\(.+\\))?:/i"
       - "/^test(\\(.+\\))?:/i"
       - "/^refactor(\\(.+\\))?:/i"
       - "/^build(\\(.+\\))?:/i"
-  - label: "type:docs"
+  - label: "documentation"
     title:
       - "/^docs(\\(.+\\))?:/i"
 
 categories:
   - title: "🚀 Features"
     labels:
-      - "type:feature"
+      - "enhancement"
     exclude-labels:
-      - "type:bug"
-      - "type:chore"
-      - "type:docs"
-      - "type:spike"
+      - "bug"
+      - "github_actions"
+      - "documentation"
       - "dependencies"
   - title: "🐛 Bug Fixes"
     labels:
-      - "type:bug"
+      - "bug"
     exclude-labels:
-      - "type:feature"
-      - "type:chore"
-      - "type:docs"
-      - "type:spike"
+      - "enhancement"
+      - "github_actions"
+      - "documentation"
       - "dependencies"
   - title: "🧰 Maintenance"
     labels:
-      - "type:chore"
-      - "tech-debt"
+      - "github_actions"
     exclude-labels:
-      - "type:feature"
-      - "type:bug"
-      - "type:docs"
-      - "type:spike"
+      - "enhancement"
+      - "bug"
+      - "documentation"
       - "dependencies"
   - title: "📝 Documentation"
     labels:
-      - "type:docs"
+      - "documentation"
     exclude-labels:
-      - "type:feature"
-      - "type:bug"
-      - "type:chore"
-      - "type:spike"
-      - "dependencies"
-  - title: "🔬 Spikes & Research"
-    labels:
-      - "type:spike"
-    exclude-labels:
+      - "enhancement"
+      - "bug"
+      - "github_actions"
       - "dependencies"
   - title: "⬆️ Dependency Updates"
     labels:
@@ -76,15 +66,12 @@ change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
 change-title-escapes: '\<*_&'
 
 version-resolver:
-  major:
-    labels:
-      - "type:breaking"
   minor:
     labels:
-      - "type:feature"
+      - "enhancement"
   patch:
     labels:
-      - "type:bug"
-      - "type:chore"
-      - "type:docs"
+      - "bug"
+      - "github_actions"
+      - "documentation"
   default: patch

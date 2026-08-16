@@ -25,42 +25,31 @@ autolabeler:
     title:
       - "/^docs(\\(.+\\))?:/i"
 
+# release-drafter v7 ignores per-category `exclude-labels` (deprecated; only
+# top-level works). `labels-mode: exactly` is the v7-native way to express the
+# same intent: a PR only enters a category when its label set is exactly the
+# configured one. Dependabot PRs carry both `github_actions` and `dependencies`,
+# so they can never match Maintenance — they only match "Dependency Updates".
 categories:
   - title: "🚀 Features"
-    labels:
-      - "enhancement"
-    exclude-labels:
-      - "bug"
-      - "github_actions"
-      - "documentation"
-      - "dependencies"
+    when:
+      labels: ["enhancement"]
+      labels-mode: "exactly"
   - title: "🐛 Bug Fixes"
-    labels:
-      - "bug"
-    exclude-labels:
-      - "enhancement"
-      - "github_actions"
-      - "documentation"
-      - "dependencies"
+    when:
+      labels: ["bug"]
+      labels-mode: "exactly"
   - title: "🧰 Maintenance"
-    labels:
-      - "github_actions"
-    exclude-labels:
-      - "enhancement"
-      - "bug"
-      - "documentation"
-      - "dependencies"
+    when:
+      labels: ["github_actions"]
+      labels-mode: "exactly"
   - title: "📝 Documentation"
-    labels:
-      - "documentation"
-    exclude-labels:
-      - "enhancement"
-      - "bug"
-      - "github_actions"
-      - "dependencies"
+    when:
+      labels: ["documentation"]
+      labels-mode: "exactly"
   - title: "⬆️ Dependency Updates"
-    labels:
-      - "dependencies"
+    when:
+      labels: ["dependencies"]
 
 change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
 change-title-escapes: '\<*_&'

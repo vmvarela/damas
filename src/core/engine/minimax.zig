@@ -179,6 +179,7 @@ fn kingValue(variant: Variant) i32 {
 }
 
 /// The four diagonal directions as (dr, dc) offsets.
+// Order must match rules.zig king_dirs — structurePenalty/pawnDest index by it.
 const dirs = [_][2]i8{ .{ -1, -1 }, .{ -1, 1 }, .{ 1, -1 }, .{ 1, 1 } };
 
 /// ray_table[sq][d][k] = square reached from sq after k+1 steps in direction
@@ -267,20 +268,19 @@ fn promotionBonus(board: Board32, sq: u8, color: Color) i32 {
 
 /// Edge structure: -10 per man on an edge column, -50 extra for a true
 /// "perro" — an edge man with no legal move and no legal capture. Capture
-/// detection mirrors rules.zig: English pawns capture in all four
-/// directions, Spanish pawns forward only; a capture exists only when the
-/// intermediate square holds an enemy piece AND the landing square is
-/// on-board and empty.
-fn structurePenalty(board: Board32, sq: u8, color: Color, variant: Variant) i32 {
+/// detection matches rules.zig: pawns capture forward only in both variants,
+/// so only the two forward directions are checked (English kings capture in
+/// all four directions, but kings never reach this function — it is called
+/// only for pawns). A capture exists only when the intermediate square holds
+/// an enemy piece AND the landing square is on-board and empty.
+fn structurePenalty(board: Board32, sq: u8, color: Color) i32 {
     const rc = board_mod.squareToRowCol(sq);
     if (rc.col != 0 and rc.col != 7) return 0;
     var penalty: i32 = 10;
     const has_move = pawnDest(board, sq, color) > 0;
     const first: usize = if (color == .white) 2 else 0;
-    const dirs_start: usize = if (variant == .english) 0 else first;
-    const dirs_end: usize = if (variant == .english) 4 else first + 2;
     var has_capture = false;
-    for (dirs_start..dirs_end) |d| {
+    for (first..first + 2) |d| {
         const mid = ray_table[sq][d][0];
         if (mid < 0) continue;
         const p = board[@intCast(mid)];
@@ -306,9 +306,9 @@ fn evaluate(board: Board32, turn: Color, variant: Variant) i32 {
         const piece = board[sq];
         const rc = board_mod.squareToRowCol(@intCast(sq));
         const v: i32 = switch (piece) {
-            .white_pawn => PAWN_VALUE + 10 * @as(i32, rc.row) + promotionBonus(board, @intCast(sq), .white) + structurePenalty(board, @intCast(sq), .white, variant),
+            .white_pawn => PAWN_VALUE + 10 * @as(i32, rc.row) + promotionBonus(board, @intCast(sq), .white) + structurePenalty(board, @intCast(sq), .white),
             .white_king => kingValue(variant) + centerBonus(rc.col),
-            .black_pawn => -(PAWN_VALUE + 10 * @as(i32, 7 - rc.row) + promotionBonus(board, @intCast(sq), .black) + structurePenalty(board, @intCast(sq), .black, variant)),
+            .black_pawn => -(PAWN_VALUE + 10 * @as(i32, 7 - rc.row) + promotionBonus(board, @intCast(sq), .black) + structurePenalty(board, @intCast(sq), .black)),
             .black_king => -(kingValue(variant) + centerBonus(rc.col)),
             .empty => 0,
         };
@@ -454,7 +454,7 @@ fn sidePositional(board: Board32, variant: Variant, color: Color) i32 {
         if (c != color) continue;
         const sq_u: u8 = @intCast(sq);
         switch (p) {
-            .white_pawn, .black_pawn => s += pawnDest(board, sq_u, color) + promotionBonus(board, sq_u, color) + structurePenalty(board, sq_u, color, variant),
+            .white_pawn, .black_pawn => s += pawnDest(board, sq_u, color) + promotionBonus(board, sq_u, color) + structurePenalty(board, sq_u, color),
             else => s += 3 * kingDest(board, sq_u, variant),
         }
     }
@@ -523,23 +523,27 @@ test "evaluate: edge man blocked behind an own piece is a perro" {
     try std.testing.expect(evaluate(blocked, .white, .english) < evaluate(open, .white, .english));
 }
 
-test "evaluate: a legal capture rescues an edge man from perro" {
-    // W(4,0) has its own W(5,1) forward (no quiet move). English pawns also
-    // capture backward: B(3,1) with an empty (2,2) landing → not a perro.
-    // Spanish pawns capture forward only → the same man stays a perro. An
-    // occupied (2,2) landing kills the capture in both variants.
-    var back_cap: Board32 = [_]Piece{.empty} ** 32;
-    back_cap[board_mod.rowColToSquare(4, 0)] = .white_pawn;
-    back_cap[board_mod.rowColToSquare(5, 1)] = .white_pawn;
-    back_cap[board_mod.rowColToSquare(3, 1)] = .black_pawn;
-    try std.testing.expect(evaluate(back_cap, .white, .english) > evaluate(back_cap, .white, .spanish));
+test "evaluate: a legal forward capture rescues an edge man from perro" {
+    // Pawns capture forward only in both variants, so an enemy behind the
+    // man never rescues it. W(4,0) has its own W(5,1) forward (no quiet
+    // move); a backward enemy B(3,1) leaves it a perro — identical in
+    // English and Spanish (old code scored english > spanish here because
+    // the eval re-implemented the backward-capture bug).
+    var backward_enemy: Board32 = [_]Piece{.empty} ** 32;
+    backward_enemy[board_mod.rowColToSquare(4, 0)] = .white_pawn;
+    backward_enemy[board_mod.rowColToSquare(5, 1)] = .white_pawn;
+    backward_enemy[board_mod.rowColToSquare(3, 1)] = .black_pawn;
+    try std.testing.expectEqual(evaluate(backward_enemy, .white, .english), evaluate(backward_enemy, .white, .spanish));
 
-    var blocked_landing: Board32 = [_]Piece{.empty} ** 32;
-    blocked_landing[board_mod.rowColToSquare(4, 0)] = .white_pawn;
-    blocked_landing[board_mod.rowColToSquare(5, 1)] = .white_pawn;
-    blocked_landing[board_mod.rowColToSquare(3, 1)] = .black_pawn;
-    blocked_landing[board_mod.rowColToSquare(2, 2)] = .white_pawn;
-    try std.testing.expectEqual(evaluate(blocked_landing, .white, .english), evaluate(blocked_landing, .white, .spanish));
+    // A forward enemy with an empty landing rescues the man — identically
+    // in both variants. Same material as backward_enemy (2 white, 1 black),
+    // so the rescue signal is comparable.
+    var forward_capture: Board32 = [_]Piece{.empty} ** 32;
+    forward_capture[board_mod.rowColToSquare(4, 0)] = .white_pawn;
+    forward_capture[board_mod.rowColToSquare(5, 1)] = .black_pawn;
+    forward_capture[board_mod.rowColToSquare(2, 2)] = .white_pawn;
+    try std.testing.expectEqual(evaluate(forward_capture, .white, .english), evaluate(forward_capture, .white, .spanish));
+    try std.testing.expect(evaluate(forward_capture, .white, .english) > evaluate(backward_enemy, .white, .english));
 }
 
 test "evaluate: positional terms stay under one pawn per side" {

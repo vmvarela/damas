@@ -79,8 +79,8 @@ The rules module documents both variants in its header
 (`src/core/rules.zig:1-21`):
 
 - **English draughts** — captures are mandatory; if any exist, only capture
-  moves are generated. Pawns capture forward and backward. Kings are
-  non-flying: one square per step.
+  moves are generated. Pawns move and capture forward only. Kings are
+  non-flying: one square per step in any of the four diagonal directions.
 - **Spanish damas** — pawns capture forward only. Kings are **flying**: they
   slide any distance along a diagonal. Captures are mandatory and the Spanish
   capture laws apply: keep the chains capturing the most pieces (ley de la

@@ -277,7 +277,10 @@ fn engineMove(state: *State) !void {
     state.msg = null;
     if (state.game.isGameOver()) return;
     const time_ms = minimaxTimeForTurn(state);
-    const result = minimax.search(state.game.board, state.game.turn, time_ms, state.allocator, state.game.rules) catch |e| switch (e) {
+    const result = minimax.search(state.game.board, state.game.turn, time_ms, state.allocator, state.game.rules, .{
+        .halfmove_clock = state.game.halfmove_clock,
+        .history = if (state.game.position_history) |*h| h else null,
+    }) catch |e| switch (e) {
         error.NoMoves => {
             state.msg = "No legal moves";
             return;

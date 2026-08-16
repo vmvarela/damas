@@ -108,12 +108,12 @@ perspective, every node is a "max" node; the opponent's values are just
 negated:
 
 ```zig
-const score = -negamax(b2, board_mod.opponent(turn), depth - 1, -beta, -alpha, ply + 1, ctx);
+const score = -negamax(b2, child_turn, depth - 1, -beta, -alpha, ply + 1, new_clock, child_rep_base, ctx);
 ```
-(`src/core/engine/minimax.zig:153`)
+(`src/core/engine/minimax.zig:210`)
 
 One evaluation function, alternating signs — no max/min switch per level
-(`src/core/engine/minimax.zig:303-320`).
+(`src/core/engine/minimax.zig:366-382`).
 
 #### Alpha-beta pruning
 
@@ -374,17 +374,21 @@ Start at the public API and read inward:
 
 - `minimax.search` — time-limited entry: builds a fresh 64K-entry TT
   (`1 << 16`, `src/core/engine/minimax.zig:54`), runs the ID loop, returns the deepest
-  completed result (`src/core/engine/minimax.zig:51-76`).
+  completed result (`src/core/engine/minimax.zig:63-88`).
 - `minimax.searchDepth` — fixed-depth variant for tests, no time limit
-  (`src/core/engine/minimax.zig:79-91`).
+  (`src/core/engine/minimax.zig:91-103`).
 - `rootSearch` — iterates root moves, tracks the best, stores it in
-  `ctx.root_best` (`src/core/engine/minimax.zig:94-114`).
+  `ctx.root_best` (`src/core/engine/minimax.zig:106-124`).
 - `negamax` — the recursion: time check, terminal/eval, TT probe, move
   ordering, child loop with alpha-beta cut, TT store
-  (`src/core/engine/minimax.zig:116-170`).
+  (`src/core/engine/minimax.zig:126-185`).
+- `childScore` / `repeatCount` — draw awareness: short-circuits the 80-ply
+  clock and 3-fold repetition (game history + search path) before recursing;
+  stalemate (pieces, no legal move) scores as a draw, not a loss
+  (`src/core/engine/minimax.zig:140-145,187-223`).
 - `evaluate` — material + positional terms (variant-aware king value,
-  mobility, promo bonus, edge/perro; `src/core/engine/minimax.zig:303-320`).
-- `orderMoves` / `moveScore` — MVV-LVA (`src/core/engine/minimax.zig:349-368`).
+  mobility, promo bonus, edge/perro; `src/core/engine/minimax.zig:366-382`).
+- `orderMoves` / `moveScore` — MVV-LVA (`src/core/engine/minimax.zig:412-431`).
 - `tt.zig` — `TTEntry`, `TTFlag`, `init` (zeroed — garbage keys would alias
   real hashes), `get`, `put`, `clear` (`src/core/engine/tt.zig:13-59`).
 - `zobrist.zig` — comptime table generation and `hash`
@@ -413,8 +417,11 @@ antisymmetry, mobility ordering, Spanish-vs-English king value, promo bonus,
 perro detection, positional-cap corpus, exact quiet-position regression, and
 a promotion-race tactical test (`src/core/engine/minimax.zig:464-635`).
 
-A minimax vs minimax match is the CI smoke test — it bounds the game with a
-timeout because the engine has no draw detection:
+A minimax vs minimax match is the CI smoke test. The search is draw-aware: a
+side with pieces but no legal move scores as a draw (matching game.zig), and
+`search()` receives the halfmove clock plus the position history via
+`SearchState`, so it sees the 80-ply and 3-fold draw rules mid-search. The
+timeout stays as a hard safety bound:
 
 ```json
 {

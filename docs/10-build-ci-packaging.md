@@ -87,8 +87,12 @@ Windows (`.github/workflows/ci.yml:18-19`) through:
 3. `zig build web -Doptimize=ReleaseSafe` (`.github/workflows/ci.yml:44-45`).
 4. PWA meta-tag guard — asserts the three PWA tags survive into
    `zig-out/web/index.html` (`.github/workflows/ci.yml:47-58`).
-5. CLI smoke: a minimax vs minimax match with 1 ms per move, bounded by
-   timeout because the engine has no draw detection (`.github/workflows/ci.yml:60-84`).
+5. CLI smoke: a minimax vs minimax match with 1 ms per move. The engine is
+   draw-aware — stalemate (pieces, no legal move) scores as a draw, and
+   `search()` receives the halfmove clock plus position history via
+   `SearchState`, so the 80-ply and 3-fold draw rules terminate the match
+   instead of shuffling forever; the timeout remains only as a hard safety
+   bound (`.github/workflows/ci.yml:60-84`).
 6. Web smoke (unix): serves the embedded server, expects `index.html` → 200
    and **`damas.wasm` → 404** (the server only serves its 3 embedded assets;
    a 404 is what makes WASM-mode auto-detection deterministic) (`.github/workflows/ci.yml:86-102`).

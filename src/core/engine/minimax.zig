@@ -36,6 +36,17 @@ pub const SearchResult = struct {
     nodes: u64,
 };
 
+pub const SearchState = struct {
+    /// Plies since the last capture/promotion; >= 80 declares a draw.
+    halfmove_clock: u16 = 0,
+    /// The Game's position history (hash -> count), read-only during search.
+    /// Must include the current (root) position — all production callers pass
+    /// the Game's map, which records it. Null when the caller has no Game;
+    /// repetition then only sees the search path, and root-position 3-fold
+    /// lags one occurrence (detected on the 4th, not the 3rd).
+    history: ?*const std.AutoHashMap(u64, u8) = null,
+};
+
 const SearchCtx = struct {
     tt: *TranspositionTable,
     timer: Timer,
@@ -43,17 +54,20 @@ const SearchCtx = struct {
     aborted: bool = false,
     root_best: Move = undefined,
     variant: Variant,
+    history: ?*const std.AutoHashMap(u64, u8) = null,
+    /// Zobrist hashes of positions recorded along the current search path.
+    path: [MAX_DEPTH + 2]u64 = undefined,
 };
 
 /// Time-limited search with iterative deepening. Returns the best move from
 /// the deepest completed iteration. Deterministic for a given position and
 /// time limit (fixed Zobrist seed, fresh TT per call).
-pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.mem.Allocator, variant: Variant) !SearchResult {
+pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.mem.Allocator, variant: Variant, state: SearchState) !SearchResult {
     // TT is per-call, so scores from different variants never mix. A
     // persistent TT would need the variant in the zobrist key.
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
-    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(time_limit_ms), .variant = variant };
+    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(time_limit_ms), .variant = variant, .history = state.history };
 
     var moves = MoveList{};
     rules.generateMoves(board, turn, &moves, variant);
@@ -66,7 +80,7 @@ pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.me
     while (depth <= MAX_DEPTH) : (depth += 1) {
         ctx.aborted = false;
         ctx.nodes = 0;
-        const score = rootSearch(board, turn, depth, &ctx);
+        const score = rootSearch(board, turn, depth, state.halfmove_clock, &ctx);
         if (ctx.aborted) break;
         best = ctx.root_best;
         best_score = score;
@@ -76,22 +90,22 @@ pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.me
 }
 
 /// Fixed-depth search (no time limit). Depth 0 is clamped to 1.
-pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Allocator, variant: Variant) !SearchResult {
+pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Allocator, variant: Variant, state: SearchState) !SearchResult {
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
-    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(0), .variant = variant };
+    var ctx = SearchCtx{ .tt = &tt, .timer = Timer.init(0), .variant = variant, .history = state.history };
 
     var moves = MoveList{};
     rules.generateMoves(board, turn, &moves, variant);
     if (moves.len == 0) return error.NoMoves;
 
     const d: u8 = if (depth == 0) 1 else depth;
-    const score = rootSearch(board, turn, d, &ctx);
+    const score = rootSearch(board, turn, d, state.halfmove_clock, &ctx);
     return .{ .move = ctx.root_best, .score = score, .depth = d, .nodes = ctx.nodes };
 }
 
 /// Searches all root moves, tracks the best, and stores it in ctx.root_best.
-fn rootSearch(board: Board32, turn: Color, depth: u8, ctx: *SearchCtx) i32 {
+fn rootSearch(board: Board32, turn: Color, depth: u8, clock: u16, ctx: *SearchCtx) i32 {
     var moves = MoveList{};
     rules.generateMoves(board, turn, &moves, ctx.variant);
     var best_score: i32 = std.math.minInt(i32) + 1;
@@ -99,9 +113,7 @@ fn rootSearch(board: Board32, turn: Color, depth: u8, ctx: *SearchCtx) i32 {
     var alpha = best_score;
     const beta: i32 = std.math.maxInt(i32);
     for (moves.slice()) |m| {
-        var b2 = board;
-        rules.applyMove(&b2, m);
-        const score = -negamax(b2, board_mod.opponent(turn), depth - 1, -beta, -alpha, 1, ctx);
+        const score = childScore(board, turn, m, depth, alpha, beta, 0, clock, 1, ctx);
         if (ctx.aborted) return 0;
         if (score > best_score) {
             best_score = score;
@@ -113,7 +125,7 @@ fn rootSearch(board: Board32, turn: Color, depth: u8, ctx: *SearchCtx) i32 {
     return best_score;
 }
 
-fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, ply: u8, ctx: *SearchCtx) i32 {
+fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, ply: u8, clock: u16, rep_base: u8, ctx: *SearchCtx) i32 {
     ctx.nodes += 1;
     // Check the clock only every 1024 nodes: clock_gettime per node was the
     // dominant cost in millions-node searches. Worst-case abort delay is
@@ -127,9 +139,18 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
 
     var moves = MoveList{};
     rules.generateMoves(board, turn, &moves, ctx.variant);
-    if (moves.len == 0) return -MATE_SCORE + @as(i32, ply);
+    if (moves.len == 0) {
+        // Stalemate (pieces but no legal move) is a draw; only a side with no
+        // pieces loses — matches game.zig winner().
+        if (hasAnyPiece(board, turn)) return 0;
+        return -MATE_SCORE + @as(i32, ply);
+    }
     if (depth == 0) return evaluate(board, turn, ctx.variant);
 
+    // ponytail: TT key ignores clock/repetition state — a cached score can be
+    // stale for a position that is now a draw. Bounded in magnitude (draw ≈ 0
+    // vs mate ≈ 100k); a stale positive hit on a clock-drawn position is the
+    // one vector that can still walk the engine into a draw.
     const key = zobrist.hash(board, turn);
     const tt_entry = ctx.tt.get(key);
     if (tt_entry) |e| {
@@ -148,9 +169,7 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
     var best_score: i32 = std.math.minInt(i32) + 1;
     var best_move: ?Move = null;
     for (moves.slice()) |m| {
-        var b2 = board;
-        rules.applyMove(&b2, m);
-        const score = -negamax(b2, board_mod.opponent(turn), depth - 1, -beta, -alpha, ply + 1, ctx);
+        const score = childScore(board, turn, m, depth, alpha, beta, ply, clock, rep_base, ctx);
         if (ctx.aborted) return 0;
         if (score > best_score) {
             best_score = score;
@@ -167,6 +186,54 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
         ctx.tt.put(.{ .key = key, .depth = depth, .score = best_score, .flag = flag, .move = bm });
     }
     return best_score;
+}
+
+/// Score of the position after applying `move`, from the child's side-to-move
+/// perspective, short-circuiting terminal draws (80-ply clock, 3-fold
+/// repetition) before recursing. Draw = 0 for both sides, so the caller's
+/// `-score` sign flip handles it naturally.
+fn childScore(board: Board32, turn: Color, m: Move, depth: u8, alpha: i32, beta: i32, ply: u8, clock: u16, rep_base: u8, ctx: *SearchCtx) i32 {
+    var b2 = board;
+    rules.applyMove(&b2, m);
+    const child_turn = board_mod.opponent(turn);
+    // Only a promotion turns a pawn into a king, so a king on the landing
+    // square that wasn't one before the move proves promotion (game.zig:62,68).
+    const moved_piece = board[m.from];
+    const promoted = board_mod.isKing(b2[m.to]) and !board_mod.isKing(moved_piece);
+    const irreversible = m.num_captured > 0 or promoted;
+    const new_clock: u16 = if (irreversible) 0 else clock + 1;
+    if (new_clock >= 80) return 0; // 40-move rule: 80 plies without capture/promotion
+    if (!irreversible) {
+        const h = zobrist.hash(b2, child_turn);
+        if (repeatCount(ctx, h, ply, rep_base) >= 2) return 0; // this record = 3rd occurrence
+        ctx.path[ply + 1] = h;
+    } else {
+        ctx.path[ply + 1] = zobrist.hash(b2, child_turn); // fresh window starts here
+    }
+    const child_rep_base: u8 = if (irreversible) ply + 1 else rep_base;
+    return -negamax(b2, child_turn, depth - 1, -beta, -alpha, ply + 1, new_clock, child_rep_base, ctx);
+}
+
+/// Occurrences of `hash` among game history plus search-path positions in the
+/// current repetition window [rep_base .. ply]. `ply` is the current node's
+/// ply; path[ply] is its own position, recorded by its parent.
+fn repeatCount(ctx: *SearchCtx, hash: u64, ply: u8, rep_base: u8) u32 {
+    var n: u32 = 0;
+    if (ctx.history) |h| n += @as(u32, h.get(hash) orelse 0);
+    for (rep_base..ply + 1) |i| {
+        if (ctx.path[i] == hash) n += 1;
+    }
+    return n;
+}
+
+/// True if `color` has at least one piece on the board. Mirrors game.zig's
+/// private hasPieces: a side with pieces but no legal move is stalemated
+/// (draw), only a piece-less side loses.
+fn hasAnyPiece(board: Board32, color: Color) bool {
+    for (board) |p| {
+        if (board_mod.pieceColor(p) == color) return true;
+    }
+    return false;
 }
 
 /// King value used by the evaluator: Spanish flying kings are worth more.
@@ -379,7 +446,7 @@ test "forced capture is found" {
     var board: Board32 = [_]Piece{.empty} ** 32;
     board[board_mod.rowColToSquare(2, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
-    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english);
+    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english, .{});
     try std.testing.expect(move_mod.isCapture(result.move));
 }
 
@@ -388,14 +455,14 @@ test "material advantage evaluates positive" {
     board[board_mod.rowColToSquare(2, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
     board[board_mod.rowColToSquare(5, 5)] = .white_pawn;
-    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english);
+    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english, .{});
     try std.testing.expect(result.score > 0);
 }
 
 test "search is deterministic with fresh TT" {
     const board = board_mod.initialBoard();
-    const r1 = try searchDepth(board, .white, 3, std.testing.allocator, .english);
-    const r2 = try searchDepth(board, .white, 3, std.testing.allocator, .english);
+    const r1 = try searchDepth(board, .white, 3, std.testing.allocator, .english, .{});
+    const r2 = try searchDepth(board, .white, 3, std.testing.allocator, .english, .{});
     try std.testing.expectEqual(r1.move.from, r2.move.from);
     try std.testing.expectEqual(r1.move.to, r2.move.to);
     try std.testing.expectEqual(r1.score, r2.score);
@@ -403,7 +470,7 @@ test "search is deterministic with fresh TT" {
 
 test "search with 1ms time limit returns a legal move" {
     const board = board_mod.initialBoard();
-    const result = try search(board, .white, 1, std.testing.allocator, .english);
+    const result = try search(board, .white, 1, std.testing.allocator, .english, .{});
     var moves = MoveList{};
     rules.generateMoves(board, .white, &moves, .english);
     var found = false;
@@ -415,7 +482,7 @@ test "search with 1ms time limit returns a legal move" {
 
 test "initial position search returns a legal move" {
     const board = board_mod.initialBoard();
-    const result = try search(board, .white, 100, std.testing.allocator, .english);
+    const result = try search(board, .white, 100, std.testing.allocator, .english, .{});
     try std.testing.expect(result.depth >= 1);
     var moves = MoveList{};
     rules.generateMoves(board, .white, &moves, .english);
@@ -431,15 +498,15 @@ test "deeper search finds at least as good a score" {
     board[board_mod.rowColToSquare(2, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
     board[board_mod.rowColToSquare(5, 5)] = .black_pawn;
-    const d1 = try searchDepth(board, .white, 1, std.testing.allocator, .english);
-    const d3 = try searchDepth(board, .white, 3, std.testing.allocator, .english);
+    const d1 = try searchDepth(board, .white, 1, std.testing.allocator, .english, .{});
+    const d3 = try searchDepth(board, .white, 3, std.testing.allocator, .english, .{});
     try std.testing.expect(d3.score >= d1.score);
 }
 
 test "promotion move is found when it is the only move" {
     var board: Board32 = [_]Piece{.empty} ** 32;
     board[board_mod.rowColToSquare(6, 6)] = .white_pawn;
-    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english);
+    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english, .{});
     const rc = board_mod.squareToRowCol(result.move.to);
     try std.testing.expectEqual(@as(u8, 7), rc.row);
 }
@@ -622,6 +689,88 @@ test "evaluate: promotion race picks the racing man at shallow depth" {
     board[board_mod.rowColToSquare(5, 5)] = .white_pawn;
     board[board_mod.rowColToSquare(4, 2)] = .white_pawn;
     board[board_mod.rowColToSquare(2, 4)] = .black_pawn;
-    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english);
+    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english, .{});
     try std.testing.expectEqual(board_mod.rowColToSquare(5, 5), result.move.from);
+}
+
+test "stalemate is a draw, not a mate (issue #28)" {
+    // Regression for issue #28: a side with pieces but no legal move is
+    // stalemated (draw), not mated. White's only legal move is the forced
+    // capture (2,0)x(3,1)->(4,2) (captures are mandatory, so the white pawn
+    // at (2,0) has no quiet moves). It leaves black with a king at (0,0) and
+    // pawns at (1,1) and (0,2), each blocking the other's only forward
+    // squares: black has pieces but zero legal moves -> stalemate -> draw.
+    // The old code mis-scored this as +MATE for white; it must be exactly 0.
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[board_mod.rowColToSquare(2, 0)] = .white_pawn;
+    board[board_mod.rowColToSquare(0, 0)] = .black_king;
+    board[board_mod.rowColToSquare(1, 1)] = .black_pawn;
+    board[board_mod.rowColToSquare(0, 2)] = .black_pawn;
+    board[board_mod.rowColToSquare(3, 1)] = .black_pawn;
+    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english, .{});
+    try std.testing.expectEqual(@as(i32, 0), result.score);
+}
+
+test "80-ply draw clock ends quiet shuffling (issue #28)" {
+    // White is up material (2 pawns vs 1) but every quiet move pushes the
+    // 80-ply clock to 80 -> draw. The search must score the position 0, not
+    // +material, so the engine won't shuffle into a forced draw. No captures
+    // exist anywhere on the board (white (4,4)'s forward (5,5) is its own
+    // pawn, (5,3) is empty; black (1,1)'s forward (0,0)/(0,2) are empty), and
+    // black (1,1) is mobile, so black is not stalemated: the exact 0 comes
+    // from the clock short-circuit, not the stalemate terminal.
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[board_mod.rowColToSquare(4, 4)] = .white_pawn;
+    board[board_mod.rowColToSquare(5, 5)] = .white_pawn;
+    board[board_mod.rowColToSquare(1, 1)] = .black_pawn;
+    const state = SearchState{ .halfmove_clock = 79 };
+    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english, state);
+    try std.testing.expectEqual(@as(i32, 0), result.score);
+
+    // Escape hatch: a capture resets the clock to 0, so with the same clock
+    // the search must play the mandatory capture (2,2)x(3,3)->(4,4). The
+    // surviving black king at (0,0) can still move to (1,1) afterwards, so
+    // black is not stalemated and the position scores positive for white.
+    var cap_board: Board32 = [_]Piece{.empty} ** 32;
+    cap_board[board_mod.rowColToSquare(2, 2)] = .white_king;
+    cap_board[board_mod.rowColToSquare(3, 3)] = .black_pawn;
+    cap_board[board_mod.rowColToSquare(0, 0)] = .black_king;
+    const res2 = try searchDepth(cap_board, .white, 3, std.testing.allocator, .english, state);
+    try std.testing.expect(res2.move.num_captured > 0);
+    try std.testing.expect(res2.score > 0);
+}
+
+test "3-fold repetition via game history is a draw (issue #28)" {
+    // Two-king shuffle from game.zig: white king (4,2) vs black king (4,6),
+    // variant .english, with an extra black pawn at (6,6) so white is down
+    // material: every non-draw line scores negative for white. The game
+    // history already contains the position after white's shuffle move
+    // (4,2)->(3,1) twice, so playing it a third time is a 3-fold draw — the
+    // only non-negative result — and the search must score it exactly 0.
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[board_mod.rowColToSquare(4, 2)] = .white_king;
+    board[board_mod.rowColToSquare(4, 6)] = .black_king;
+    board[board_mod.rowColToSquare(6, 6)] = .black_pawn;
+
+    var history = std.AutoHashMap(u64, u8).init(std.testing.allocator);
+    defer history.deinit();
+    var child: Board32 = [_]Piece{.empty} ** 32;
+    child[board_mod.rowColToSquare(3, 1)] = .white_king;
+    child[board_mod.rowColToSquare(4, 6)] = .black_king;
+    child[board_mod.rowColToSquare(6, 6)] = .black_pawn;
+    try history.put(zobrist.hash(child, .black), 2);
+
+    const state = SearchState{ .history = &history };
+    const result = try searchDepth(board, .white, 3, std.testing.allocator, .english, state);
+    try std.testing.expectEqual(@as(i32, 0), result.score);
+
+    // Control: the same shuffle with count 1 in history is NOT a draw —
+    // white is down a pawn, so every line scores strictly negative. Pins the
+    // count-2 (3rd occurrence) threshold.
+    var history1 = std.AutoHashMap(u64, u8).init(std.testing.allocator);
+    defer history1.deinit();
+    try history1.put(zobrist.hash(child, .black), 1);
+    const state1 = SearchState{ .history = &history1 };
+    const r1 = try searchDepth(board, .white, 3, std.testing.allocator, .english, state1);
+    try std.testing.expect(r1.score < 0);
 }

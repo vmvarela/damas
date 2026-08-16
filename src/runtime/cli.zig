@@ -94,7 +94,10 @@ fn playHuman(game: *game_mod.Game) !bool {
 }
 
 fn playMinimax(game: *game_mod.Game, time_limit_ms: u32) !void {
-    const res = try minimax.search(game.board, game.turn, time_limit_ms, std.heap.page_allocator, game.rules);
+    const res = try minimax.search(game.board, game.turn, time_limit_ms, std.heap.page_allocator, game.rules, .{
+        .halfmove_clock = game.halfmove_clock,
+        .history = if (game.position_history) |*h| h else null,
+    });
     const f = board_mod.squareToRowCol(res.move.from);
     const t = board_mod.squareToRowCol(res.move.to);
     std.debug.print("Engine: {d},{d} -> {d},{d} (score {d}, depth {d}, {d} nodes)\n", .{

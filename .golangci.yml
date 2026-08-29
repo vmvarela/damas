@@ -1,0 +1,43 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosec
+    - misspell
+    - unconvert
+  disable-all: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+        - errcheck
+    - path: config_test\.go
+      linters:
+        - errcheck
+    - path: llm_test\.go
+      linters:
+        - errcheck
+    - path: protocol_test\.go
+      linters:
+        - errcheck
+  exclude-use-default: false
+
+linters-settings:
+  gosec:
+    excludes:
+      - G115  # integer overflow
+      - G304  # file inclusion
+      - G404  # weak random
+      - G704  # SSRF
+      - G112  # Slowloris
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly

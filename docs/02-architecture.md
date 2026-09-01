@@ -98,7 +98,7 @@ Rough sizes (lines of code, `wc -l`) and one-line responsibilities.
 | `src/core/rules.zig` | 739 | Move generation, application, legality; both rule variants |
 | `src/core/game.zig` | 330 | Game state, turn, repetition/halfmove draw rules |
 | `src/core/engine/minimax.zig` | 293 | Negamax alpha-beta search with iterative deepening |
-| `src/core/engine/tt.zig` | 107 | Transposition table (overwrite replacement) |
+| `src/core/engine/tt.zig` | 107 | Transposition table (depth-preferred replacement) |
 | `src/core/engine/zobrist.zig` | 74 | Zobrist hashing for positions |
 | `src/core/engine/timer.zig` | 76 | Search time limit |
 | `src/llm/provider.zig` | 90 | Vtable-based LLM provider interface + prompt builder |

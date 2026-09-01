@@ -2,9 +2,9 @@
 //! MVV-LVA move ordering, and a time limit.
 //!
 //! Simplifications (deliberate): no quiescence search (horizon effect
-//! accepted), TT replacement is overwrite-only, eval is material + mobility
-//! + promo bonus + edge/perro structure. Board copies (32 bytes) are used
-//! for undo.
+//! accepted), TT replacement is depth-preferred (fill empty; replace on >=
+//! depth), eval is material + mobility + promo bonus + edge/perro structure.
+//! Board copies (32 bytes) are used for undo.
 
 const std = @import("std");
 const board_mod = @import("../board.zig");

@@ -1,6 +1,6 @@
 //! Transposition table for the search: fixed-size array indexed by
-//! `key & (size - 1)`, overwrite replacement (simplest policy; a two-tier
-//! or depth-preferred replacement could improve hit rate later).
+//! `key & (size - 1)`, depth-preferred replacement (fill empty slots;
+//! otherwise replace only when incoming depth >= resident depth).
 //!
 //! Keys must be non-zero: key 0 is the empty-slot marker. `zobrist.hash`
 //! enforces this by remapping 0 to 1, so all production keys satisfy it.
@@ -50,7 +50,10 @@ pub const TranspositionTable = struct {
 
     pub fn put(self: *TranspositionTable, entry: TTEntry) void {
         const idx = @as(usize, @intCast(entry.key)) & (self.entries.len - 1);
-        self.entries[idx] = entry;
+        const resident = self.entries[idx];
+        if (resident.key == 0 or entry.depth >= resident.depth) {
+            self.entries[idx] = entry;
+        }
     }
 
     pub fn clear(self: *TranspositionTable) void {
@@ -89,6 +92,72 @@ test "collision: different key at same index not returned" {
         .move = Move{ .from = 1, .to = 2, .captured = [_]u8{0} ** 12, .num_captured = 0 },
     });
     // 298 & 255 == 42 & 255, but keys differ.
+    try std.testing.expect(tt.get(298) == null);
+}
+
+test "collision keeps deeper resident entry over shallower incoming" {
+    var tt = try TranspositionTable.init(std.testing.allocator, 1 << 8);
+    defer tt.deinit();
+
+    tt.put(.{
+        .key = 42,
+        .depth = 8,
+        .score = 111,
+        .flag = .exact,
+        .move = Move{ .from = 1, .to = 2, .captured = [_]u8{0} ** 12, .num_captured = 0 },
+    });
+    tt.put(.{
+        .key = 298,
+        .depth = 4,
+        .score = 222,
+        .flag = .lower_bound,
+        .move = Move{ .from = 2, .to = 3, .captured = [_]u8{0} ** 12, .num_captured = 0 },
+    });
+
+    const got = tt.get(42);
+    try std.testing.expect(got != null);
+    try std.testing.expectEqual(@as(u8, 8), got.?.depth);
+    try std.testing.expectEqual(@as(i32, 111), got.?.score);
+    try std.testing.expect(tt.get(298) == null);
+}
+
+test "collision replaces on equal or deeper depth" {
+    var tt = try TranspositionTable.init(std.testing.allocator, 1 << 8);
+    defer tt.deinit();
+
+    tt.put(.{
+        .key = 42,
+        .depth = 6,
+        .score = 111,
+        .flag = .exact,
+        .move = Move{ .from = 1, .to = 2, .captured = [_]u8{0} ** 12, .num_captured = 0 },
+    });
+    tt.put(.{
+        .key = 298,
+        .depth = 6,
+        .score = 222,
+        .flag = .upper_bound,
+        .move = Move{ .from = 2, .to = 3, .captured = [_]u8{0} ** 12, .num_captured = 0 },
+    });
+
+    var got = tt.get(298);
+    try std.testing.expect(got != null);
+    try std.testing.expectEqual(@as(u8, 6), got.?.depth);
+    try std.testing.expectEqual(@as(i32, 222), got.?.score);
+    try std.testing.expect(tt.get(42) == null);
+
+    tt.put(.{
+        .key = 42,
+        .depth = 7,
+        .score = 333,
+        .flag = .lower_bound,
+        .move = Move{ .from = 3, .to = 4, .captured = [_]u8{0} ** 12, .num_captured = 0 },
+    });
+
+    got = tt.get(42);
+    try std.testing.expect(got != null);
+    try std.testing.expectEqual(@as(u8, 7), got.?.depth);
+    try std.testing.expectEqual(@as(i32, 333), got.?.score);
     try std.testing.expect(tt.get(298) == null);
 }
 

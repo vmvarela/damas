@@ -196,15 +196,13 @@ The probe uses the flag to tighten bounds or return early
 (`src/core/engine/minimax.zig:133-144`). The stored move also seeds move
 ordering (`src/core/engine/minimax.zig:146`).
 
-**Simplification accepted:** replacement is overwrite-only. A new entry simply
-replaces whatever sits in its slot — no depth preference, no two-tier scheme.
-The header names the upgrade path: "a two-tier or depth-preferred replacement
-could improve hit rate later" (`src/core/engine/tt.zig:1-3`). It's fine for a
-didactic engine; a stronger engine would protect deep entries from shallow
-ones.
+Current replacement policy is depth-preferred: an empty slot is filled; on a
+collision, the new entry replaces the resident one only when
+`incoming.depth >= resident.depth`; shallower entries are rejected
+(`src/core/engine/tt.zig:1-3`, `put` at 51-57).
 
 The table is a fixed-size array indexed by `key & (size - 1)`
-(`src/core/engine/tt.zig:1-2`, `get` at 41-49, `put` at 51-54). `key 0` is
+(`src/core/engine/tt.zig:1-2`, `get` at 41-49, `put` at 51-57). `key 0` is
 the empty-slot marker, which is why the zobrist hash never returns 0
 (`src/core/engine/tt.zig:5-6`).
 
@@ -323,8 +321,8 @@ The header lists what was *not* built, on purpose:
 
 ```zig
 //! Simplifications (deliberate): no quiescence search (horizon effect
-//! accepted), TT replacement is overwrite-only, eval is material + small
-//! positional terms.
+//! accepted), TT replacement is depth-preferred (fill empty; replace on >=
+//! depth), eval is material + mobility + promo bonus + edge/perro structure.
 ```
 (`src/core/engine/minimax.zig:4-6`)
 
@@ -333,7 +331,7 @@ Didactically, each one is "what you sacrifice and when it would matter":
 | Simplification | Sacrifice | When it would matter |
 |----------------|-----------|----------------------|
 | No quiescence search | **Horizon effect**: a capture just past the search depth is invisible; the engine may trade into a lost position one ply later | Sharp tactical positions with hanging pieces; strong engines extend search after captures |
-| TT overwrite-only | Lower TT hit rate; deep entries can be clobbered by shallow ones | Long searches where depth matters; a depth-preferred policy is the standard fix |
+| Single-slot TT replacement (depth-preferred, no two-tier/aging policy) | Shallow collisions are rejected, but equal/deeper collisions can still evict useful entries | Long searches where TT stability matters across many collisions; two-tier or aging policies are the usual next step |
 | Material + small positional terms | No king-placement tables, no endgame knowledge, no quiescence-aware eval | Balanced material positions where positional play decides |
 
 For a didactic engine this is the right line: each simplification has a named

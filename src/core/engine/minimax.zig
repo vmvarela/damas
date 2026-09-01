@@ -26,6 +26,7 @@ pub const Timer = timer_mod.Timer;
 
 const MAX_DEPTH: u8 = 24;
 const MATE_SCORE: i32 = 100_000;
+const MATE_TT_MARGIN: i32 = 1024;
 const PAWN_VALUE: i32 = 100;
 const KING_VALUE: i32 = 300; // ordering heuristic only; eval uses kingValue(variant)
 
@@ -89,7 +90,7 @@ pub fn search(board: Board32, turn: Color, time_limit_ms: u32, allocator: std.me
     return .{ .move = best, .score = best_score, .depth = completed_depth, .nodes = ctx.nodes };
 }
 
-/// Fixed-depth search (no time limit). Depth 0 is clamped to 1.
+/// Fixed-depth search (no time limit). Depth is clamped to [1, MAX_DEPTH].
 pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Allocator, variant: Variant, state: SearchState) !SearchResult {
     var tt = try TranspositionTable.init(allocator, 1 << 16);
     defer tt.deinit();
@@ -99,7 +100,7 @@ pub fn searchDepth(board: Board32, turn: Color, depth: u8, allocator: std.mem.Al
     rules.generateMoves(board, turn, &moves, variant);
     if (moves.len == 0) return error.NoMoves;
 
-    const d: u8 = if (depth == 0) 1 else depth;
+    const d: u8 = @min(if (depth == 0) @as(u8, 1) else depth, MAX_DEPTH);
     const score = rootSearch(board, turn, d, state.halfmove_clock, &ctx);
     return .{ .move = ctx.root_best, .score = score, .depth = d, .nodes = ctx.nodes };
 }
@@ -154,13 +155,14 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
     const key = zobrist.hash(board, turn);
     const tt_entry = ctx.tt.get(key);
     if (tt_entry) |e| {
+        const tt_score = ttScoreToNode(e.score, ply);
         if (e.depth >= depth) {
             switch (e.flag) {
-                .exact => return e.score,
-                .lower_bound => alpha = @max(alpha, e.score),
-                .upper_bound => beta = @min(beta, e.score),
+                .exact => return tt_score,
+                .lower_bound => alpha = @max(alpha, tt_score),
+                .upper_bound => beta = @min(beta, tt_score),
             }
-            if (alpha >= beta) return e.score;
+            if (alpha >= beta) return tt_score;
         }
     }
 
@@ -183,9 +185,23 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
     if (best_score > alpha_in) flag = .exact;
     if (alpha >= beta) flag = .lower_bound;
     if (best_move) |bm| {
-        ctx.tt.put(.{ .key = key, .depth = depth, .score = best_score, .flag = flag, .move = bm });
+        ctx.tt.put(.{ .key = key, .depth = depth, .score = nodeScoreToTt(best_score, ply), .flag = flag, .move = bm });
     }
     return best_score;
+}
+
+fn nodeScoreToTt(score: i32, ply: u8) i32 {
+    const p: i32 = @intCast(ply);
+    if (score >= MATE_SCORE - MATE_TT_MARGIN) return score + p;
+    if (score <= -MATE_SCORE + MATE_TT_MARGIN) return score - p;
+    return score;
+}
+
+fn ttScoreToNode(score: i32, ply: u8) i32 {
+    const p: i32 = @intCast(ply);
+    if (score >= MATE_SCORE - MATE_TT_MARGIN) return score - p;
+    if (score <= -MATE_SCORE + MATE_TT_MARGIN) return score + p;
+    return score;
 }
 
 /// Score of the position after applying `move`, from the child's side-to-move
@@ -201,7 +217,7 @@ fn childScore(board: Board32, turn: Color, m: Move, depth: u8, alpha: i32, beta:
     const moved_piece = board[m.from];
     const promoted = board_mod.isKing(b2[m.to]) and !board_mod.isKing(moved_piece);
     const irreversible = m.num_captured > 0 or promoted;
-    const new_clock: u16 = if (irreversible) 0 else clock + 1;
+    const new_clock: u16 = if (irreversible) 0 else clock +| 1;
     if (new_clock >= 80) return 0; // 40-move rule: 80 plies without capture/promotion
     if (!irreversible) {
         const h = zobrist.hash(b2, child_turn);
@@ -773,4 +789,35 @@ test "3-fold repetition via game history is a draw (issue #28)" {
     const state1 = SearchState{ .history = &history1 };
     const r1 = try searchDepth(board, .white, 3, std.testing.allocator, .english, state1);
     try std.testing.expect(r1.score < 0);
+}
+
+test "searchDepth clamps depth above MAX_DEPTH" {
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[board_mod.rowColToSquare(4, 2)] = .white_king;
+    board[board_mod.rowColToSquare(4, 6)] = .black_king;
+
+    const result = try searchDepth(board, .white, 255, std.testing.allocator, .english, .{});
+    try std.testing.expectEqual(@as(u8, MAX_DEPTH), result.depth);
+}
+
+test "clock increment saturates in search near u16 max" {
+    var board: Board32 = [_]Piece{.empty} ** 32;
+    board[board_mod.rowColToSquare(4, 2)] = .white_king;
+    board[board_mod.rowColToSquare(4, 6)] = .black_king;
+    const state = SearchState{ .halfmove_clock = std.math.maxInt(u16) };
+
+    const result = try searchDepth(board, .white, 2, std.testing.allocator, .english, state);
+    try std.testing.expectEqual(@as(i32, 0), result.score);
+}
+
+test "mate TT score helpers normalize by ply" {
+    const win = MATE_SCORE - 7;
+    const lose = -MATE_SCORE + 9;
+    try std.testing.expectEqual(win, ttScoreToNode(nodeScoreToTt(win, 3), 3));
+    try std.testing.expectEqual(lose, ttScoreToNode(nodeScoreToTt(lose, 3), 3));
+    try std.testing.expectEqual(@as(i32, 42), ttScoreToNode(nodeScoreToTt(42, 5), 1));
+
+    // Same TT mate entry probed deeper must look farther away.
+    try std.testing.expectEqual(win - 3, ttScoreToNode(nodeScoreToTt(win, 2), 5));
+    try std.testing.expectEqual(lose + 3, ttScoreToNode(nodeScoreToTt(lose, 2), 5));
 }

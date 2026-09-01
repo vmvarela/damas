@@ -58,7 +58,10 @@ pub const Game = struct {
     /// repetition: captures and promotions are irreversible (clock resets,
     /// history clears), quiet moves advance the clock and record the position.
     pub fn applyMove(self: *Game, move: Move) bool {
+        if (self.isGameOver()) return false;
         if (!rules.isLegalMove(self.board, self.turn, move, self.rules)) return false;
+        // Keep history lazy but seed root on first legal move.
+        if (self.position_history == null) self.recordPosition();
         const moved_piece = self.board[move.from]; // rules.applyMove empties `from`
         rules.applyMove(&self.board, move);
         self.turn = board_mod.opponent(self.turn);
@@ -70,7 +73,7 @@ pub const Game = struct {
             self.halfmove_clock = 0;
             if (self.position_history) |*h| h.clearRetainingCapacity();
         } else {
-            self.halfmove_clock += 1;
+            self.halfmove_clock +|= 1;
         }
         self.recordPosition();
         return true;
@@ -233,6 +236,27 @@ test "repetition: same position 3 times is a draw" {
     try std.testing.expectEqual(@as(?Color, null), game.winner());
 }
 
+test "repetition counts root position without manual seed" {
+    var game = try Game.initRules(std.testing.allocator, .english);
+    defer game.deinit();
+
+    game.board = [_]Piece{.empty} ** 32;
+    game.board[board_mod.rowColToSquare(4, 2)] = .white_king;
+    game.board[board_mod.rowColToSquare(4, 6)] = .black_king;
+    game.turn = .white;
+    game.halfmove_clock = 0;
+    // No manual recordPosition(): first applyMove must seed the root.
+
+    // One full cycle (4 plies): start position occurred twice.
+    for (shuffle_cycle) |c| try playFromTo(game, c[0], c[1], c[2], c[3]);
+    try std.testing.expect(!game.isGameOver());
+
+    // Second cycle: start position occurs a third time -> draw.
+    for (shuffle_cycle) |c| try playFromTo(game, c[0], c[1], c[2], c[3]);
+    try std.testing.expect(game.isGameOver());
+    try std.testing.expectEqual(@as(?Color, null), game.winner());
+}
+
 test "40-move rule: no capture or promotion for 80 plies is a draw" {
     var game = try Game.init(std.testing.allocator);
     defer game.deinit();
@@ -243,6 +267,23 @@ test "40-move rule: no capture or promotion for 80 plies is a draw" {
     try std.testing.expectEqual(@as(u16, 80), game.halfmove_clock);
     try std.testing.expect(game.isGameOver());
     try std.testing.expectEqual(@as(?Color, null), game.winner());
+}
+
+test "applyMove is rejected after game over by 80-ply clock" {
+    var game = try Game.init(std.testing.allocator);
+    defer game.deinit();
+
+    game.halfmove_clock = 79;
+    const white_quiet = Move{ .from = board_mod.rowColToSquare(2, 0), .to = board_mod.rowColToSquare(3, 1), .captured = [_]u8{0} ** 12, .num_captured = 0 };
+    try std.testing.expect(game.applyMove(white_quiet));
+    try std.testing.expectEqual(@as(u16, 80), game.halfmove_clock);
+    try std.testing.expect(game.isGameOver());
+
+    // Legal for black on board, but rejected because game already over.
+    const black_quiet = Move{ .from = board_mod.rowColToSquare(5, 1), .to = board_mod.rowColToSquare(4, 0), .captured = [_]u8{0} ** 12, .num_captured = 0 };
+    try std.testing.expect(!game.applyMove(black_quiet));
+    try std.testing.expectEqual(@as(Color, .black), game.turn);
+    try std.testing.expectEqual(@as(u16, 80), game.halfmove_clock);
 }
 
 test "issue #28 board: white pawn blocked forward, capture landing occupied — zero moves, draw" {

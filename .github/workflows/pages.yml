@@ -33,7 +33,7 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Build web
-        run: zig build web -Doptimize=ReleaseSafe
+        run: zig build web -Doptimize=ReleaseSmall
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

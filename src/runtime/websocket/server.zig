@@ -331,13 +331,30 @@ test "server: connection slot counter caps active handlers" {
     slots.release();
 }
 
+test "server: serveStatic HEAD / returns 200 headers without body" {
+    var out: [8192]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    try serveStatic(&writer, "/", .HEAD);
+
+    const resp = writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, resp, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Content-Type: text/html; charset=utf-8\r\n") != null);
+
+    const html = web.get("/") orelse unreachable;
+    var len_buf: [64]u8 = undefined;
+    const expected_len = try std.fmt.bufPrint(&len_buf, "Content-Length: {d}\r\n", .{html.content.len});
+    try std.testing.expect(std.mem.indexOf(u8, resp, expected_len) != null);
+    try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
+}
+
 /// Serve one embedded asset or a 404. `writer` is the raw connection writer.
 fn serveStatic(writer: *std.Io.Writer, target: []const u8, method: std.http.Method) !void {
     const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
-    const asset = if (method == .GET) web.get(path) else null;
+    const wants_asset = method == .GET or method == .HEAD;
+    const asset = if (wants_asset) web.get(path) else null;
     if (asset) |a| {
         try writer.print("HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nContent-Length: {d}\r\n\r\n", .{ a.content_type, a.content.len });
-        try writer.writeAll(a.content);
+        if (method == .GET) try writer.writeAll(a.content);
     } else {
         try writer.writeAll("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
     }

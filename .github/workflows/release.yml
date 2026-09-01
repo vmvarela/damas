@@ -104,7 +104,7 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Build web
-        run: zig build web -Doptimize=ReleaseSafe
+        run: zig build web -Doptimize=ReleaseSmall
 
       - name: Stage bundle
         run: |

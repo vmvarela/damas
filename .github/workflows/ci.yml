@@ -33,6 +33,17 @@ jobs:
           key: zig-cache-${{ matrix.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
           restore-keys: zig-cache-${{ matrix.os }}-
 
+      - name: Zig fmt check (tracked files)
+        shell: bash
+        run: |
+          # Bash 3.2 on macOS has no mapfile/readarray.
+          zig_files=($(git ls-files '*.zig'))
+          if [ "${#zig_files[@]}" -eq 0 ]; then
+            echo "No tracked Zig files";
+            exit 0
+          fi
+          zig fmt --check "${zig_files[@]}"
+
       - name: Build
         run: zig build -Doptimize=ReleaseSafe
 
@@ -42,7 +53,7 @@ jobs:
         run: zig build test
 
       - name: Build WASM web bundle
-        run: zig build web -Doptimize=ReleaseSafe
+        run: zig build web -Doptimize=ReleaseSmall
 
       - name: PWA meta tags present in index.html
         shell: bash
@@ -94,9 +105,11 @@ jobs:
             if curl -fsS http://127.0.0.1:8123/ > /dev/null 2>&1; then break; fi
             sleep 0.5
           done
+          head_root_code=$(curl -s -o /dev/null -w '%{http_code}' -I http://127.0.0.1:8123/)
           code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/index.html)
           wasm_code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8123/damas.wasm)
-          echo "index: $code, damas.wasm: $wasm_code (404 expected: server serves only 3 assets)"
+          echo "HEAD /: $head_root_code, index: $code, damas.wasm: $wasm_code (404 expected: server serves only 3 assets)"
+          if [ "$head_root_code" != "200" ]; then echo "FAIL: HEAD / not served"; kill $pid; exit 1; fi
           if [ "$code" != "200" ]; then echo "FAIL: index not served"; kill $pid; exit 1; fi
           if [ "$wasm_code" != "404" ]; then echo "FAIL: expected 404 for damas.wasm"; kill $pid; exit 1; fi
           kill $pid 2>/dev/null || true

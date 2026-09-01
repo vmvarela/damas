@@ -75,6 +75,13 @@ pub fn handleMessage(
         return stateJson(allocator, game, conn, null);
     }
 
+    if ((std.mem.eql(u8, action, "make_move") or
+        std.mem.eql(u8, action, "compute_minimax") or
+        std.mem.eql(u8, action, "request_llm")) and game.isGameOver())
+    {
+        return stateJson(allocator, game, conn, "game over");
+    }
+
     if (std.mem.eql(u8, action, "make_move")) {
         const from = fieldU8(root, "from") orelse
             return stateJson(allocator, game, conn, "invalid from");

@@ -28,23 +28,65 @@ fn defaultProvider(allocator: std.mem.Allocator, model: []const u8) anyerror!pro
 /// Accept loop on loopback:port. Each connection gets a fresh game and is
 /// served in its own thread; a long-lived WebSocket must not starve the
 /// static HTTP serving (browsers load assets while the WS is open).
-/// ponytail: thread-per-connection, fire-and-forget; a thread pool is YAGNI
-/// until connection counts matter. std.Io.Threaded is thread-safe for
-/// blocking net ops from spawned threads.
+/// ponytail: thread-per-connection with hard cap; thread pool still YAGNI.
+/// std.Io.Threaded is thread-safe for blocking net ops from spawned threads.
+const max_connection_threads: u32 = 16;
+
+const ConnectionSlots = struct {
+    active: std.atomic.Value(u32) = .init(0),
+    max: u32,
+
+    fn init(max: u32) ConnectionSlots {
+        return .{ .max = max };
+    }
+
+    fn tryAcquire(self: *ConnectionSlots) bool {
+        const prev = self.active.fetchAdd(1, .acq_rel);
+        if (prev >= self.max) {
+            _ = self.active.fetchSub(1, .acq_rel);
+            return false;
+        }
+        return true;
+    }
+
+    fn release(self: *ConnectionSlots) void {
+        const prev = self.active.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+    }
+};
+
 pub fn serve(port: u16, default_rules: game_mod.Variant) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var addr = std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(port) };
     var server = try addr.listen(io, .{ .kernel_backlog = 16 });
     defer server.deinit(io);
+    const listen_port = server.socket.address.getPort();
+    var slots = ConnectionSlots.init(max_connection_threads);
     while (true) {
         // Transient accept errors (EMFILE etc.) shouldn't kill the whole server.
         const stream = server.accept(io) catch continue;
-        const t = std.Thread.spawn(.{}, handleConnection, .{ io, stream, default_rules }) catch {
+        if (!slots.tryAcquire()) {
+            stream.close(io);
+            continue;
+        }
+        const t = std.Thread.spawn(.{}, handleConnectionThread, .{ io, stream, default_rules, listen_port, &slots }) catch {
+            slots.release();
             stream.close(io); // spawn failure: drop the connection, keep serving
             continue;
         };
         t.detach(); // fire-and-forget; the connection frees its own resources
     }
+}
+
+fn handleConnectionThread(
+    io: std.Io,
+    stream: std.Io.net.Stream,
+    default_rules: game_mod.Variant,
+    listen_port: u16,
+    slots: *ConnectionSlots,
+) void {
+    defer slots.release();
+    handleConnection(io, stream, default_rules, listen_port) catch {};
 }
 
 /// Web mode: static frontend + WebSocket on the same port, browser opened.
@@ -107,7 +149,7 @@ test "server: browser-launch children are auto-reaped on POSIX" {
     const io = threaded.io();
     var pids: [3]std.posix.pid_t = undefined;
     for (&pids) |*pid| {
-        const child = try std.process.spawn(io, .{ .argv = &.{ "true" } });
+        const child = try std.process.spawn(io, .{ .argv = &.{"true"} });
         pid.* = child.id.?;
     }
     // Give them time to exit; with SIGCHLD ignored the kernel reaps at exit.
@@ -137,13 +179,182 @@ test "server: browser-launch children are auto-reaped on POSIX" {
     try std.testing.expect(std.mem.indexOfScalar(u8, out_buf[0..nread], 'Z') == null);
 }
 
+const OriginCase = enum {
+    none,
+    evil,
+    localhost,
+    loopback,
+    null_origin,
+    malformed,
+};
+
+fn handshakeStatusLine(origin_case: OriginCase) ![]const u8 {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var addr = std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(0) };
+    var server = try addr.listen(io, .{ .kernel_backlog = 1 });
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    const T = struct {
+        fn run(io_t: std.Io, srv: *std.Io.net.Server, listen_port: u16) void {
+            const stream = srv.accept(io_t) catch return;
+            handleConnection(io_t, stream, .english, listen_port) catch {};
+        }
+    };
+    const accept_t = try std.Thread.spawn(.{}, T.run, .{ io, &server, port });
+
+    var connect_addr = std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(port) };
+    var client = try connect_addr.connect(io, .{ .mode = .stream, .protocol = .tcp });
+
+    var out_buf: [1024]u8 = undefined;
+    var client_writer = client.writer(io, &out_buf);
+    switch (origin_case) {
+        .none => try client_writer.interface.print(
+            "GET /ws HTTP/1.1\r\n" ++
+                "Host: 127.0.0.1:{d}\r\n" ++
+                "Connection: Upgrade\r\n" ++
+                "Upgrade: websocket\r\n" ++
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+                "Sec-WebSocket-Version: 13\r\n" ++
+                "\r\n",
+            .{port},
+        ),
+        .evil => try client_writer.interface.print(
+            "GET /ws HTTP/1.1\r\n" ++
+                "Host: 127.0.0.1:{d}\r\n" ++
+                "Connection: Upgrade\r\n" ++
+                "Upgrade: websocket\r\n" ++
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+                "Sec-WebSocket-Version: 13\r\n" ++
+                "Origin: http://evil.test\r\n" ++
+                "\r\n",
+            .{port},
+        ),
+        .localhost => try client_writer.interface.print(
+            "GET /ws HTTP/1.1\r\n" ++
+                "Host: 127.0.0.1:{d}\r\n" ++
+                "Connection: Upgrade\r\n" ++
+                "Upgrade: websocket\r\n" ++
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+                "Sec-WebSocket-Version: 13\r\n" ++
+                "Origin: http://localhost:{d}\r\n" ++
+                "\r\n",
+            .{ port, port },
+        ),
+        .loopback => try client_writer.interface.print(
+            "GET /ws HTTP/1.1\r\n" ++
+                "Host: 127.0.0.1:{d}\r\n" ++
+                "Connection: Upgrade\r\n" ++
+                "Upgrade: websocket\r\n" ++
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+                "Sec-WebSocket-Version: 13\r\n" ++
+                "Origin: http://127.0.0.1:{d}\r\n" ++
+                "\r\n",
+            .{ port, port },
+        ),
+        .null_origin => try client_writer.interface.print(
+            "GET /ws HTTP/1.1\r\n" ++
+                "Host: 127.0.0.1:{d}\r\n" ++
+                "Connection: Upgrade\r\n" ++
+                "Upgrade: websocket\r\n" ++
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+                "Sec-WebSocket-Version: 13\r\n" ++
+                "Origin: null\r\n" ++
+                "\r\n",
+            .{port},
+        ),
+        .malformed => try client_writer.interface.print(
+            "GET /ws HTTP/1.1\r\n" ++
+                "Host: 127.0.0.1:{d}\r\n" ++
+                "Connection: Upgrade\r\n" ++
+                "Upgrade: websocket\r\n" ++
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+                "Sec-WebSocket-Version: 13\r\n" ++
+                "Origin: ://broken\r\n" ++
+                "\r\n",
+            .{port},
+        ),
+    }
+    try client_writer.interface.flush();
+
+    var in_buf: [1024]u8 = undefined;
+    var client_reader = client.reader(io, &in_buf);
+    const line = try client_reader.interface.takeDelimiterExclusive('\n');
+    const status = try std.testing.allocator.dupe(u8, std.mem.trim(u8, line, "\r"));
+
+    client.close(io);
+    accept_t.join();
+    return status;
+}
+
+test "server: websocket handshake rejects foreign Origin" {
+    const status = try handshakeStatusLine(.evil);
+    defer std.testing.allocator.free(status);
+    try std.testing.expectEqualStrings("HTTP/1.1 403 Forbidden", status);
+}
+
+test "server: websocket handshake allows localhost/127.0.0.1 and missing Origin" {
+    const status_localhost = try handshakeStatusLine(.localhost);
+    defer std.testing.allocator.free(status_localhost);
+    try std.testing.expectEqualStrings("HTTP/1.1 101 Switching Protocols", status_localhost);
+
+    const status_loopback = try handshakeStatusLine(.loopback);
+    defer std.testing.allocator.free(status_loopback);
+    try std.testing.expectEqualStrings("HTTP/1.1 101 Switching Protocols", status_loopback);
+
+    const status_no_origin = try handshakeStatusLine(.none);
+    defer std.testing.allocator.free(status_no_origin);
+    try std.testing.expectEqualStrings("HTTP/1.1 101 Switching Protocols", status_no_origin);
+}
+
+test "server: websocket handshake rejects null and malformed Origin" {
+    const status_null = try handshakeStatusLine(.null_origin);
+    defer std.testing.allocator.free(status_null);
+    try std.testing.expectEqualStrings("HTTP/1.1 403 Forbidden", status_null);
+
+    const status_malformed = try handshakeStatusLine(.malformed);
+    defer std.testing.allocator.free(status_malformed);
+    try std.testing.expectEqualStrings("HTTP/1.1 403 Forbidden", status_malformed);
+}
+
+test "server: connection slot counter caps active handlers" {
+    var slots = ConnectionSlots.init(2);
+    try std.testing.expect(slots.tryAcquire());
+    try std.testing.expect(slots.tryAcquire());
+    try std.testing.expect(!slots.tryAcquire());
+    slots.release();
+    try std.testing.expect(slots.tryAcquire());
+    slots.release();
+    slots.release();
+}
+
+test "server: serveStatic HEAD / returns 200 headers without body" {
+    var out: [8192]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    try serveStatic(&writer, "/", .HEAD);
+
+    const resp = writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, resp, "HTTP/1.1 200 OK\r\n"));
+    try std.testing.expect(std.mem.indexOf(u8, resp, "Content-Type: text/html; charset=utf-8\r\n") != null);
+
+    const html = web.get("/") orelse unreachable;
+    var len_buf: [64]u8 = undefined;
+    const expected_len = try std.fmt.bufPrint(&len_buf, "Content-Length: {d}\r\n", .{html.content.len});
+    try std.testing.expect(std.mem.indexOf(u8, resp, expected_len) != null);
+    try std.testing.expect(std.mem.endsWith(u8, resp, "\r\n\r\n"));
+}
+
 /// Serve one embedded asset or a 404. `writer` is the raw connection writer.
 fn serveStatic(writer: *std.Io.Writer, target: []const u8, method: std.http.Method) !void {
     const path = target[0 .. std.mem.indexOfScalar(u8, target, '?') orelse target.len];
-    const asset = if (method == .GET) web.get(path) else null;
+    const wants_asset = method == .GET or method == .HEAD;
+    const asset = if (wants_asset) web.get(path) else null;
     if (asset) |a| {
         try writer.print("HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nContent-Length: {d}\r\n\r\n", .{ a.content_type, a.content.len });
-        try writer.writeAll(a.content);
+        if (method == .GET) try writer.writeAll(a.content);
     } else {
         try writer.writeAll("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
     }
@@ -174,7 +385,53 @@ fn waitReadable(reader: *const std.Io.Reader, fd: std.posix.fd_t, timeout_ms: i3
     return n > 0;
 }
 
-fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_mod.Variant) !void {
+fn requestHeader(req: *const std.http.Server.Request, name: []const u8) ?[]const u8 {
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, name)) return h.value;
+    }
+    return null;
+}
+
+fn defaultOriginPort(scheme: []const u8) ?u16 {
+    if (std.ascii.eqlIgnoreCase(scheme, "http")) return 80;
+    if (std.ascii.eqlIgnoreCase(scheme, "https")) return 443;
+    return null;
+}
+
+fn isLocalhostOriginHost(host: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return true;
+    if (std.mem.eql(u8, host, "127.0.0.1")) return true;
+    if (std.mem.eql(u8, host, "[::1]")) return true;
+    if (std.mem.eql(u8, host, "::1")) return true;
+    return false;
+}
+
+fn isAllowedWebSocketOrigin(origin_header: ?[]const u8, listen_port: u16) bool {
+    // Compatibility policy: non-browser clients often omit Origin.
+    const origin = origin_header orelse return true;
+    if (std.mem.eql(u8, origin, "null")) return false;
+
+    const uri = std.Uri.parse(origin) catch return false;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "http") and !std.ascii.eqlIgnoreCase(uri.scheme, "https")) return false;
+    const host_component = uri.host orelse return false;
+    var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = host_component.toRaw(&host_buf) catch return false;
+    if (!isLocalhostOriginHost(host)) return false;
+
+    const origin_port = uri.port orelse defaultOriginPort(uri.scheme) orelse return false;
+    return origin_port == listen_port;
+}
+
+fn respondForbiddenOrigin(req: *std.http.Server.Request) !void {
+    try req.respond("forbidden origin", .{
+        .status = .forbidden,
+        .keep_alive = false,
+        .extra_headers = &.{.{ .name = "content-type", .value = "text/plain; charset=utf-8" }},
+    });
+}
+
+fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_mod.Variant, listen_port: u16) !void {
     defer stream.close(io);
     var in_buf: [65536]u8 = undefined;
     var out_buf: [65536]u8 = undefined;
@@ -188,6 +445,10 @@ fn handleConnection(io: std.Io, stream: std.Io.net.Stream, default_rules: game_m
     var req = try srv.receiveHead();
     switch (req.upgradeRequested()) {
         .websocket => |opt_key| {
+            if (!isAllowedWebSocketOrigin(requestHeader(&req, "origin"), listen_port)) {
+                try respondForbiddenOrigin(&req);
+                return;
+            }
             const key = opt_key orelse return;
             var ws = try req.respondWebSocket(.{ .key = key });
             // respondWebSocket buffers the 101; flush it NOW or the client

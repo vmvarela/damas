@@ -43,8 +43,13 @@ pub fn build(b: *std.Build) void {
 
     // WASM standalone module: exports the protocol ABI (src/wasm_api.zig)
     // for the browser build. Rooted at src/ (protocol imports live under
-    // src/). entry disabled + rdynamic keeps only the exported symbols;
-    // ReleaseSmall keeps the download lean.
+    // src/). Entry disabled + rdynamic keeps only the exported symbols.
+    // Default is ReleaseSmall for `zig build web`; explicit release optimize
+    // flags (-Doptimize=ReleaseSafe/ReleaseFast/ReleaseSmall) are honored.
+    const wasm_optimize: std.builtin.OptimizeMode = switch (optimize) {
+        .ReleaseSafe, .ReleaseFast, .ReleaseSmall => optimize,
+        .Debug => .ReleaseSmall,
+    };
     const web_step = b.step("web", "Build the WASM module and copy web assets");
     const wasm = b.addExecutable(.{
         .name = "damas",
@@ -54,7 +59,7 @@ pub fn build(b: *std.Build) void {
                 .cpu_arch = .wasm32,
                 .os_tag = .freestanding,
             }),
-            .optimize = .ReleaseSmall,
+            .optimize = wasm_optimize,
         }),
     });
     wasm.entry = .disabled;

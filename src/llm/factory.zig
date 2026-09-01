@@ -19,19 +19,19 @@ pub const Error = error{
 const Provider = struct { name: []const u8, url: []const u8, key_env: []const u8 };
 
 const providers = [_]Provider{
-    .{ .name = "groq",       .url = "https://api.groq.com/openai/v1",       .key_env = "GROQ_API_KEY" },
-    .{ .name = "openai",     .url = "https://api.openai.com/v1",             .key_env = "OPENAI_API_KEY" },
-    .{ .name = "deepseek",   .url = "https://api.deepseek.com/v1",           .key_env = "DEEPSEEK_API_KEY" },
-    .{ .name = "mistral",    .url = "https://api.mistral.ai/v1",             .key_env = "MISTRAL_API_KEY" },
-    .{ .name = "together",   .url = "https://api.together.xyz/v1",           .key_env = "TOGETHER_API_KEY" },
-    .{ .name = "fireworks",  .url = "https://api.fireworks.ai/inference/v1", .key_env = "FIREWORKS_API_KEY" },
-    .{ .name = "xai",        .url = "https://api.x.ai/v1",                   .key_env = "XAI_API_KEY" },
-    .{ .name = "cerebras",   .url = "https://api.cerebras.ai/v1",            .key_env = "CEREBRAS_API_KEY" },
-    .{ .name = "openrouter", .url = "https://openrouter.ai/api/v1",          .key_env = "OPENROUTER_API_KEY" },
-    .{ .name = "perplexity", .url = "https://api.perplexity.ai",             .key_env = "PERPLEXITY_API_KEY" },
-    .{ .name = "sambanova",  .url = "https://api.sambanova.ai/v1",           .key_env = "SAMBANOVA_API_KEY" },
-    .{ .name = "deepinfra",  .url = "https://api.deepinfra.com/v1/openai",   .key_env = "DEEPINFRA_API_KEY" },
-    .{ .name = "github",     .url = "https://models.inference.ai.azure.com", .key_env = "GITHUB_TOKEN" },
+    .{ .name = "groq", .url = "https://api.groq.com/openai/v1", .key_env = "GROQ_API_KEY" },
+    .{ .name = "openai", .url = "https://api.openai.com/v1", .key_env = "OPENAI_API_KEY" },
+    .{ .name = "deepseek", .url = "https://api.deepseek.com/v1", .key_env = "DEEPSEEK_API_KEY" },
+    .{ .name = "mistral", .url = "https://api.mistral.ai/v1", .key_env = "MISTRAL_API_KEY" },
+    .{ .name = "together", .url = "https://api.together.xyz/v1", .key_env = "TOGETHER_API_KEY" },
+    .{ .name = "fireworks", .url = "https://api.fireworks.ai/inference/v1", .key_env = "FIREWORKS_API_KEY" },
+    .{ .name = "xai", .url = "https://api.x.ai/v1", .key_env = "XAI_API_KEY" },
+    .{ .name = "cerebras", .url = "https://api.cerebras.ai/v1", .key_env = "CEREBRAS_API_KEY" },
+    .{ .name = "openrouter", .url = "https://openrouter.ai/api/v1", .key_env = "OPENROUTER_API_KEY" },
+    .{ .name = "perplexity", .url = "https://api.perplexity.ai", .key_env = "PERPLEXITY_API_KEY" },
+    .{ .name = "sambanova", .url = "https://api.sambanova.ai/v1", .key_env = "SAMBANOVA_API_KEY" },
+    .{ .name = "deepinfra", .url = "https://api.deepinfra.com/v1/openai", .key_env = "DEEPINFRA_API_KEY" },
+    .{ .name = "github", .url = "https://models.inference.ai.azure.com", .key_env = "GITHUB_TOKEN" },
 };
 
 comptime {

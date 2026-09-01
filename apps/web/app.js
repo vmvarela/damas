@@ -212,6 +212,11 @@
     }
   }
 
+  function registerServiceWorkerForWasm() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+
   async function initWasm() {
     wasmMode = true;
     setLlmUnavailable();
@@ -680,6 +685,11 @@
   // Number keys 1–9 select the 1st–9th piece of the side to move.
   document.addEventListener('keydown', (e) => {
     if (!state || state.over || busy) return;
+    const target = e.target;
+    if (target instanceof HTMLElement) {
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
+    }
     const num = Number(e.key);
     if (num < 1 || num > 9) return;
     const pieces = [];
@@ -697,7 +707,10 @@
   });
 
   detectMode().then((mode) => {
-    if (mode === 'wasm') initWasm();
+    if (mode === 'wasm') {
+      registerServiceWorkerForWasm();
+      initWasm();
+    }
     else connect();
   });
 })();

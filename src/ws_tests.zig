@@ -74,6 +74,14 @@ fn convergentGame(allocator: std.mem.Allocator) !*game_mod.Game {
     return game;
 }
 
+fn finishedGame(allocator: std.mem.Allocator) !*game_mod.Game {
+    var game = try game_mod.Game.init(allocator);
+    game.board = [_]board_mod.Piece{.empty} ** 32;
+    game.board[31] = .black_pawn;
+    game.turn = .white;
+    return game;
+}
+
 /// Fake provider: always returns the first legal move for the current
 /// position (works across turns, so multi-request tests stay valid).
 fn fakeRequestMove(ctx: *anyopaque, allocator: std.mem.Allocator, req: provider.Request) anyerror!provider.Response {
@@ -743,6 +751,15 @@ fn countingBuild(allocator: std.mem.Allocator, model: []const u8) anyerror!provi
     return fakeProvider();
 }
 
+var game_over_build_calls: usize = 0;
+
+fn gameOverCountingBuild(allocator: std.mem.Allocator, model: []const u8) anyerror!provider.LlmProvider {
+    _ = allocator;
+    _ = model;
+    game_over_build_calls += 1;
+    return fakeProvider();
+}
+
 test "ws: provider is built once and cached across requests" {
     const allocator = std.testing.allocator;
     build_calls = 0;
@@ -758,4 +775,39 @@ test "ws: provider is built once and cached across requests" {
         try std.testing.expect(state.value.@"error" == null);
     }
     try std.testing.expectEqual(@as(usize, 1), build_calls);
+}
+
+test "ws: game over blocks make_move, compute_minimax and request_llm" {
+    const allocator = std.testing.allocator;
+    var game = try finishedGame(allocator);
+    defer game.deinit();
+    game_over_build_calls = 0;
+    var conn = protocol.ConnState{ .build_provider = gameOverCountingBuild };
+
+    for ([_][]const u8{
+        "{\"action\":\"make_move\",\"from\":4,\"to\":9}",
+        "{\"action\":\"compute_minimax\",\"time_limit_ms\":1000}",
+        "{\"action\":\"request_llm\",\"model\":\"x\"}",
+    }) |frame| {
+        const resp = try protocol.handleMessage(allocator, game, &conn, frame, .english);
+        defer allocator.free(resp);
+        var state = try parseState(allocator, resp);
+        defer state.deinit();
+        try std.testing.expectEqualStrings("game over", state.value.@"error".?);
+    }
+    try std.testing.expectEqual(@as(usize, 0), game_over_build_calls);
+}
+
+test "ws: game over still allows new_game" {
+    const allocator = std.testing.allocator;
+    var game = try finishedGame(allocator);
+    defer game.deinit();
+    var conn = protocol.ConnState{};
+
+    const resp = try protocol.handleMessage(allocator, game, &conn, "{\"action\":\"new_game\"}", .english);
+    defer allocator.free(resp);
+    var state = try parseState(allocator, resp);
+    defer state.deinit();
+    try std.testing.expect(state.value.@"error" == null);
+    try std.testing.expect(!state.value.over);
 }

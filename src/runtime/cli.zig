@@ -81,7 +81,7 @@ fn playHuman(game: *game_mod.Game) !bool {
         const f = board_mod.squareToRowCol(m.from);
         const t = board_mod.squareToRowCol(m.to);
         std.debug.print("  {d}: {d},{d} -> {d},{d}{s}\n", .{
-            i + 1, f.row, f.col, t.row, t.col,
+            i + 1,                                        f.row, f.col, t.row, t.col,
             if (m.num_captured > 0) " (capture)" else "",
         });
     }

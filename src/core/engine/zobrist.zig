@@ -153,8 +153,8 @@ test "updateHash matches hash for every legal move across positions" {
     flying[board_mod.rowColToSquare(5, 5)] = .black_pawn;
 
     const positions = [_]Board32{
-        board_mod.initialBoard(), quiet,   single,    multi,
-        promo_w,                  promo_w_cap, promo_b, promo_b_cap,
+        board_mod.initialBoard(), quiet,        single,  multi,
+        promo_w,                  promo_w_cap,  promo_b, promo_b_cap,
         kings,                    king_vs_king, flying,
     };
 

@@ -113,8 +113,11 @@ fn rootSearch(board: Board32, turn: Color, depth: u8, clock: u16, ctx: *SearchCt
     var best_move = moves.slice()[0];
     var alpha = best_score;
     const beta: i32 = std.math.maxInt(i32);
+    // Root key hashed once from scratch; child keys are threaded down
+    // incrementally (updateHash) instead of being re-hashed at every node.
+    const root_key = zobrist.hash(board, turn);
     for (moves.slice()) |m| {
-        const score = childScore(board, turn, m, depth, alpha, beta, 0, clock, 1, ctx);
+        const score = childScore(board, turn, m, depth, alpha, beta, 0, clock, 1, root_key, ctx);
         if (ctx.aborted) return 0;
         if (score > best_score) {
             best_score = score;
@@ -126,7 +129,7 @@ fn rootSearch(board: Board32, turn: Color, depth: u8, clock: u16, ctx: *SearchCt
     return best_score;
 }
 
-fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, ply: u8, clock: u16, rep_base: u8, ctx: *SearchCtx) i32 {
+fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, ply: u8, clock: u16, rep_base: u8, key: u64, ctx: *SearchCtx) i32 {
     ctx.nodes += 1;
     // Check the clock only every 1024 nodes: clock_gettime per node was the
     // dominant cost in millions-node searches. Worst-case abort delay is
@@ -152,7 +155,6 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
     // stale for a position that is now a draw. Bounded in magnitude (draw ≈ 0
     // vs mate ≈ 100k); a stale positive hit on a clock-drawn position is the
     // one vector that can still walk the engine into a draw.
-    const key = zobrist.hash(board, turn);
     const tt_entry = ctx.tt.get(key);
     if (tt_entry) |e| {
         const tt_score = ttScoreToNode(e.score, ply);
@@ -171,7 +173,7 @@ fn negamax(board: Board32, turn: Color, depth: u8, alpha_in: i32, beta_in: i32, 
     var best_score: i32 = std.math.minInt(i32) + 1;
     var best_move: ?Move = null;
     for (moves.slice()) |m| {
-        const score = childScore(board, turn, m, depth, alpha, beta, ply, clock, rep_base, ctx);
+        const score = childScore(board, turn, m, depth, alpha, beta, ply, clock, rep_base, key, ctx);
         if (ctx.aborted) return 0;
         if (score > best_score) {
             best_score = score;
@@ -207,11 +209,14 @@ fn ttScoreToNode(score: i32, ply: u8) i32 {
 /// Score of the position after applying `move`, from the child's side-to-move
 /// perspective, short-circuiting terminal draws (80-ply clock, 3-fold
 /// repetition) before recursing. Draw = 0 for both sides, so the caller's
-/// `-score` sign flip handles it naturally.
-fn childScore(board: Board32, turn: Color, m: Move, depth: u8, alpha: i32, beta: i32, ply: u8, clock: u16, rep_base: u8, ctx: *SearchCtx) i32 {
+/// `-score` sign flip handles it naturally. `parent_key` is the caller
+/// position's Zobrist key; the child key is computed incrementally
+/// (zobrist.updateHash) from the pre-move board and threaded into negamax.
+fn childScore(board: Board32, turn: Color, m: Move, depth: u8, alpha: i32, beta: i32, ply: u8, clock: u16, rep_base: u8, parent_key: u64, ctx: *SearchCtx) i32 {
     var b2 = board;
     rules.applyMove(&b2, m);
     const child_turn = board_mod.opponent(turn);
+    const child_key = zobrist.updateHash(board, m, parent_key);
     // Only a promotion turns a pawn into a king, so a king on the landing
     // square that wasn't one before the move proves promotion (game.zig:62,68).
     const moved_piece = board[m.from];
@@ -220,14 +225,13 @@ fn childScore(board: Board32, turn: Color, m: Move, depth: u8, alpha: i32, beta:
     const new_clock: u16 = if (irreversible) 0 else clock +| 1;
     if (new_clock >= 80) return 0; // 40-move rule: 80 plies without capture/promotion
     if (!irreversible) {
-        const h = zobrist.hash(b2, child_turn);
-        if (repeatCount(ctx, h, ply, rep_base) >= 2) return 0; // this record = 3rd occurrence
-        ctx.path[ply + 1] = h;
+        if (repeatCount(ctx, child_key, ply, rep_base) >= 2) return 0; // this record = 3rd occurrence
+        ctx.path[ply + 1] = child_key;
     } else {
-        ctx.path[ply + 1] = zobrist.hash(b2, child_turn); // fresh window starts here
+        ctx.path[ply + 1] = child_key; // fresh window starts here
     }
     const child_rep_base: u8 = if (irreversible) ply + 1 else rep_base;
-    return -negamax(b2, child_turn, depth - 1, -beta, -alpha, ply + 1, new_clock, child_rep_base, ctx);
+    return -negamax(b2, child_turn, depth - 1, -beta, -alpha, ply + 1, new_clock, child_rep_base, child_key, ctx);
 }
 
 /// Occurrences of `hash` among game history plus search-path positions in the

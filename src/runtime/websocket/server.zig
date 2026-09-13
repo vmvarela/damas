@@ -21,8 +21,11 @@ var g_default_provider: ?[]const u8 = null;
 /// Default provider builder injected into `protocol.ConnState` by serveGame:
 /// the factory-backed path that used to be handleMessage's implicit default.
 /// Keeps the factory (and its HTTP deps) out of the pure protocol layer.
-fn defaultProvider(allocator: std.mem.Allocator, model: []const u8) anyerror!provider_mod.LlmProvider {
-    return factory.fromConfig(allocator, .{ .provider = g_default_provider, .model = model });
+fn defaultProvider(_: std.mem.Allocator, model: []const u8) anyerror!provider_mod.LlmProvider {
+    // Provider is connection-scoped: it must NOT use handleMessage's
+    // per-message scratch arena passed in as `allocator` — the arena resets
+    // between messages and would free live provider state (key/model dupes).
+    return factory.fromConfig(std.heap.page_allocator, .{ .provider = g_default_provider, .model = model });
 }
 
 /// Accept loop on loopback:port. Each connection gets a fresh game and is
@@ -471,6 +474,14 @@ fn serveGame(ws: *std.http.Server.WebSocket, default_rules: game_mod.Variant, fd
     defer game.deinit();
     var conn = protocol.ConnState{ .build_provider = defaultProvider };
     defer if (conn.provider) |p| p.deinit();
+    // Per-message scratch arena: JSON parse, state/legal-moves serialization,
+    // the engine's TT and the LLM request all allocate here. Reset after each
+    // message is handled and WRITTEN (response is arena-owned; resetting
+    // before the write would send freed bytes). Long-lived state — the game
+    // struct, its position_history and the cached provider — stays on
+    // page_allocator, mirroring the WASM path (wasm_api.zig).
+    var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer scratch.deinit();
 
     while (true) {
         // Idle reaping: close after `idle_timeout_ms` of silence. `return`
@@ -486,11 +497,13 @@ fn serveGame(ws: *std.http.Server.WebSocket, default_rules: game_mod.Variant, fd
             .text, .binary => {},
             else => return,
         }
-        const resp = protocol.handleMessage(std.heap.page_allocator, game, &conn, msg.data, default_rules) catch {
+        const resp = protocol.handleMessage(scratch.allocator(), game, &conn, msg.data, default_rules) catch {
             try ws.writeMessage("{\"error\":\"server error\"}", .text);
             return;
         };
-        defer std.heap.page_allocator.free(resp);
         try ws.writeMessage(resp, .text);
+        // Response already on the wire; recycle the arena. retain_capacity
+        // keeps the largest message's buffer around (same as wasm_api.zig).
+        _ = scratch.reset(.retain_capacity);
     }
 }

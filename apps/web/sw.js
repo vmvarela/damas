@@ -1,4 +1,4 @@
-const CACHE = 'damas-v3';
+const CACHE = 'damas-v4';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -8,6 +8,7 @@ self.addEventListener('install', (event) => {
         './index.html',
         './style.css',
         './app.js',
+        './engine-worker.js',
         './damas.wasm',
         './manifest.webmanifest',
       ])

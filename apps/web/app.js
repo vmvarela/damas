@@ -27,7 +27,12 @@
 
   let ws = null;
   let wasm = null;
+  let worker = null;
+  let wasmReady = false;
   let wasmMode = false;
+  // ?noworker: debug fallback — run the WASM engine synchronously on the
+  // main thread (old behavior) instead of the Web Worker.
+  const noworker = new URLSearchParams(location.search).has('noworker');
   let reconnectTimer = null;
   let selectedSq = null;
   let busy = false;
@@ -147,11 +152,12 @@
     return true;
   }
 
-  // WASM transport: synchronous request/response against the standalone
-  // damas.wasm artifact — same JSON wire format as the WebSocket server.
+  // WASM transport (debug fallback, ?noworker only): synchronous
+  // request/response against the standalone damas.wasm artifact on the main
+  // thread — same JSON wire format as the WebSocket server.
   // ABI: dz_req_ptr()/dz_req_cap() expose a request buffer, dz_handle(len)
   // returns the response JSON packed as ptr<<32|len, valid until the next call.
-  function sendWasm(payload) {
+  function sendWasmSync(payload) {
     if (!wasm) {
       setBusy(false);
       lastAction = null;
@@ -194,6 +200,22 @@
     return true;
   }
 
+  // WASM transport: the engine lives in engine-worker.js. No correlation
+  // ids: the busy flag guarantees at most one in-flight request, so every
+  // worker message maps to the last posted request. Busy clears on
+  // 'response' (via handleState) or 'error'.
+  function sendWasm(payload) {
+    if (noworker) return sendWasmSync(payload);
+    if (!worker || !wasmReady) {
+      setBusy(false);
+      lastAction = null;
+      setStatus('Engine not loaded. Refresh.', true);
+      return false;
+    }
+    worker.postMessage({ type: 'request', payload });
+    return true;
+  }
+
   // Mode detection: HEAD on damas.wasm — the `damas web` server serves only
   // its 3 assets, so a 404 deterministically means WebSocket mode. Query
   // overrides: ?wasm forces WASM, ?server forces WebSocket.
@@ -222,6 +244,68 @@
     setLlmUnavailable();
     setConnection('connected', 'local (wasm)');
     setStatus('Loading engine…');
+    if (noworker) return initWasmSync();
+    // The worker owns its own wasm instance (engine-worker.js). Wrap
+    // construction: on file:// or a failed Worker constructor we follow the
+    // same degrade path as a failed init below.
+    try {
+      worker = new Worker('engine-worker.js');
+    } catch (e) {
+      workerInitFailed(e);
+      return;
+    }
+    worker.addEventListener('message', (ev) => {
+      const { type } = ev.data;
+      if (type === 'ready') {
+        wasmReady = true;
+        moveHistory = [];
+        clearChainState();
+        setStatus('Engine loaded.');
+        send({ action: 'new_game' });
+      } else if (type === 'response') {
+        handleState(ev.data.msg);
+      } else if (type === 'error') {
+        if (!wasmReady) {
+          // Init failure: same degrade path as a failed Worker construction.
+          workerInitFailed(ev.data);
+        } else {
+          // Request failure (oversized request, engine OOM, bad JSON).
+          setBusy(false);
+          lastAction = null;
+          setStatus(ev.data.message, true);
+        }
+      }
+    });
+    worker.addEventListener('error', (ev) => {
+      // Uncaught worker error (script missing on file://, syntax error…).
+      workerInitFailed(ev);
+    });
+    worker.postMessage({ type: 'init', rules: rulesSelect.value });
+  }
+
+  function workerInitFailed(err) {
+    const message = err && err.message ? err.message : String(err);
+    if (worker) {
+      worker.terminate();
+      worker = null;
+    }
+    if (new URLSearchParams(location.search).has('wasm')) {
+      // Explicit ?wasm override: surface the failure, don't fall back.
+      setStatus('Failed to load damas.wasm: ' + message, true);
+      setConnection('', 'wasm failed');
+    } else {
+      // Unforced failure: degrade to the WebSocket transport instead of
+      // leaving the UI dead until refresh.
+      setStatus('WASM engine unavailable (' + message + ') — connecting to server.', true);
+      wasmMode = false;
+      connect();
+    }
+  }
+
+  // Debug fallback (?noworker): the pre-worker synchronous init — the wasm
+  // instance lives on the main thread and dz_handle blocks it.
+  async function initWasmSync() {
+    wasmReady = true;
     try {
       const imports = { env: { dz_now_ms: () => performance.now() } };
       let mod;
@@ -240,17 +324,7 @@
       setStatus('Engine loaded.');
       send({ action: 'new_game' });
     } catch (e) {
-      if (new URLSearchParams(location.search).has('wasm')) {
-        // Explicit ?wasm override: surface the failure, don't fall back.
-        setStatus('Failed to load damas.wasm: ' + e.message, true);
-        setConnection('', 'wasm failed');
-      } else {
-        // Unforced failure: degrade to the WebSocket transport instead of
-        // leaving the UI dead until refresh.
-        setStatus('WASM engine unavailable (' + e.message + ') — connecting to server.', true);
-        wasmMode = false;
-        connect();
-      }
+      workerInitFailed(e);
     }
   }
 
@@ -651,8 +725,6 @@
     if (wasHumanMove && autoToggle.checked && !state.over) {
       setBusy(true);
       lastAction = 'compute_minimax';
-      // wasm dz_handle is synchronous on the main thread — keep it short so
-      // the busy spinner still paints.
       send({ action: 'compute_minimax', time_limit_ms: wasmMode ? 250 : 1000 });
     }
   }

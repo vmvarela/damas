@@ -69,6 +69,22 @@ pub fn build(b: *std.Build) void {
         web_step.dependOn(&b.addInstallFile(b.path(b.fmt("apps/web/{s}", .{asset})), b.fmt("web/{s}", .{asset})).step);
     }
 
+    // Generate man page from scdoc source if scdoc (and gzip) are available
+    // (optional dependencies).
+    const man_step = b.step("man", "Generate man page with scdoc (optional)");
+    const build_man = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\if command -v scdoc >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1; then
+        \\  mkdir -p zig-out/share/man/man1
+        \\  scdoc < docs/damas.1.scd | gzip -c > zig-out/share/man/man1/damas.1.gz
+        \\  echo "✓ Generated man page: zig-out/share/man/man1/damas.1.gz"
+        \\else
+        \\  echo "⚠ scdoc and/or gzip not found. Install them to generate man page."
+        \\  echo "  Manual source: docs/damas.1.scd"
+        \\fi
+    });
+    man_step.dependOn(&build_man.step);
+
     const test_step = b.step("test", "Run core, LLM, and WebSocket tests");
 
     // Core Zig tests (engine + game).

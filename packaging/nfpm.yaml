@@ -28,6 +28,12 @@ contents:
     file_info:
       mode: 0755
 
+  # Man page
+  - src: ./damas.1.gz
+    dst: /usr/share/man/man1/damas.1.gz
+    file_info:
+      mode: 0644
+
   # License — Debian policy: copyright file under /usr/share/doc/<pkg>/
   - src: ./LICENSE
     dst: /usr/share/doc/damas/copyright

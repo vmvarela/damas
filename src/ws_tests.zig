@@ -798,6 +798,52 @@ test "ws: game over blocks make_move, compute_minimax and request_llm" {
     try std.testing.expectEqual(@as(usize, 0), game_over_build_calls);
 }
 
+test "ws: serveGame-style scratch arena: provider and history survive resets" {
+    // Mirrors the server's serveGame loop: long-lived state (game, provider)
+    // on the backing allocator, per-message work on a scratch arena that is
+    // reset after every handled message. The reset must not corrupt the
+    // cached provider, the position history, or the connection state.
+    const allocator = std.testing.allocator;
+    var game = try game_mod.Game.init(allocator);
+    defer game.deinit();
+    var conn = protocol.ConnState{ .provider = fakeProvider() };
+
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+
+    // new_game on the scratch arena.
+    const resp0 = try protocol.handleMessage(scratch.allocator(), game, &conn, "{\"action\":\"new_game\"}", .english);
+    try std.testing.expect(resp0.len > 0);
+    _ = scratch.reset(.retain_capacity);
+
+    // make_move: the move itself lives on the backing allocator (like the
+    // server's game), the message round-trip on the arena.
+    var moves = move_mod.MoveList{};
+    game.generateMoves(&moves);
+    const m = moves.slice()[0];
+    const body = try std.fmt.allocPrint(allocator, "{{\"action\":\"make_move\",\"from\":{d},\"to\":{d}}}", .{ m.from, m.to });
+    defer allocator.free(body);
+    const resp1 = try protocol.handleMessage(scratch.allocator(), game, &conn, body, .english);
+    try std.testing.expect(resp1.len > 0);
+    _ = scratch.reset(.retain_capacity);
+
+    // History was allocated from the backing allocator and must still be
+    // alive after two arena resets.
+    try std.testing.expect(game.position_history != null);
+    try std.testing.expect(conn.last_move != null);
+
+    // request_llm: the cached provider must survive the resets.
+    const resp2 = try protocol.handleMessage(scratch.allocator(), game, &conn, "{\"action\":\"request_llm\"}", .english);
+    var state = try parseState(allocator, resp2);
+    defer state.deinit();
+    _ = scratch.reset(.retain_capacity);
+
+    try std.testing.expect(state.value.@"error" == null);
+    try std.testing.expect(state.value.last_move != null);
+    try std.testing.expectEqual(board_mod.Color.white, state.value.turn);
+    try std.testing.expect(conn.provider != null);
+}
+
 test "ws: game over still allows new_game" {
     const allocator = std.testing.allocator;
     var game = try finishedGame(allocator);

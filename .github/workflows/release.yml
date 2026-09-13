@@ -118,6 +118,35 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  build-man:
+    name: Build man page
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install scdoc
+        run: sudo apt-get install -y scdoc
+
+      - name: Build man page
+        run: zig build man
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp zig-out/share/man/man1/damas.1.gz dist/damas.1.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: damas-man
+          path: dist/
+          if-no-files-found: error
+
   release:
     name: Attach assets to release
     needs: [build, build-web]
@@ -244,6 +273,7 @@ jobs:
           SHA_MACOS_X64=$(sha256sum artifacts/damas-x86_64-macos   | awk '{print $1}')
           SHA_LINUX_ARM64=$(sha256sum artifacts/damas-aarch64-linux | awk '{print $1}')
           SHA_LINUX_X64=$(sha256sum artifacts/damas-x86_64-linux   | awk '{print $1}')
+          SHA_MAN=$(sha256sum artifacts/damas.1.gz | awk '{print $1}')
 
           cat > damas.rb <<'FORMULA'
           class Damas < Formula
@@ -274,8 +304,16 @@ jobs:
               end
             end
 
+            resource "man" do
+              url "https://github.com/vmvarela/damas/releases/download/v__VERSION__/damas.1.gz"
+              sha256 "__SHA_MAN__"
+            end
+
             def install
               bin.install Dir["damas*"].first => "damas"
+              resource("man").stage do
+                man1.install "damas.1.gz"
+              end
             end
 
             test do
@@ -290,6 +328,7 @@ jobs:
           sed -i "s/__SHA_MACOS_X64__/${SHA_MACOS_X64}/g"     damas.rb
           sed -i "s/__SHA_LINUX_ARM64__/${SHA_LINUX_ARM64}/g" damas.rb
           sed -i "s/__SHA_LINUX_X64__/${SHA_LINUX_X64}/g"     damas.rb
+          sed -i "s/__SHA_MAN__/${SHA_MAN}/g"                 damas.rb
 
           echo "==> Generated formula for damas ${VERSION}:"
           cat damas.rb
@@ -434,6 +473,7 @@ jobs:
           cp artifacts/${{ matrix.asset }}  pkg-work/damas
           chmod +x pkg-work/damas
           cp LICENSE                         pkg-work/LICENSE
+          cp artifacts/damas.1.gz           pkg-work/damas.1.gz
 
       - name: Build .deb
         working-directory: pkg-work
@@ -498,6 +538,7 @@ jobs:
           cp artifacts/${{ matrix.asset }}  pkg-work/damas
           chmod +x pkg-work/damas
           cp LICENSE                         pkg-work/LICENSE
+          cp artifacts/damas.1.gz           pkg-work/damas.1.gz
 
       - name: Build .rpm
         working-directory: pkg-work
@@ -562,6 +603,7 @@ jobs:
           cp artifacts/${{ matrix.asset }}  pkg-work/damas
           chmod +x pkg-work/damas
           cp LICENSE                         pkg-work/LICENSE
+          cp artifacts/damas.1.gz           pkg-work/damas.1.gz
 
       - name: Build .apk
         working-directory: pkg-work

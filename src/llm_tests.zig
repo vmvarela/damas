@@ -376,3 +376,84 @@ test "openai.buildChatBody: valid JSON with system and user messages" {
     try std.testing.expectEqualStrings("USER \"quoted\" \nnewline", msgs[1].object.get("content").?.string);
     try std.testing.expectEqual(@as(i64, 0), obj.get("temperature").?.integer);
 }
+
+test "providers: OpenAI and Ollama HTTP responses use the request allocator" {
+    var threaded: std.Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var addr = std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(0) };
+    var server = try addr.listen(io, .{ .kernel_backlog = 2 });
+    const port = server.socket.address.getPort();
+
+    const Endpoint = struct {
+        fn run(io_t: std.Io, srv: *std.Io.net.Server) void {
+            const openai_stream = srv.accept(io_t) catch return;
+            respond(
+                io_t,
+                openai_stream,
+                "/chat/completions",
+                "{\"choices\":[{\"message\":{\"content\":\"{\\\"move\\\":0,\\\"reasoning\\\":\\\"openai\\\"}\"}}]}",
+            );
+            const ollama_stream = srv.accept(io_t) catch return;
+            respond(
+                io_t,
+                ollama_stream,
+                "/api/generate",
+                "{\"response\":\"{\\\"move\\\":0,\\\"reasoning\\\":\\\"ollama\\\"}\"}",
+            );
+        }
+
+        fn respond(io_t: std.Io, stream: std.Io.net.Stream, target: []const u8, body: []const u8) void {
+            defer stream.close(io_t);
+            var in_buf: [4096]u8 = undefined;
+            var out_buf: [4096]u8 = undefined;
+            var reader = stream.reader(io_t, &in_buf);
+            var writer = stream.writer(io_t, &out_buf);
+            var http_server = std.http.Server.init(&reader.interface, &writer.interface);
+            var req = http_server.receiveHead() catch return;
+            if (!std.mem.eql(u8, req.head.target, target)) return;
+            req.respond(body, .{ .keep_alive = false }) catch return;
+            var drain_buf: [4096]u8 = undefined;
+            while (true) {
+                const nread = reader.interface.readSliceShort(&drain_buf) catch return;
+                if (nread < drain_buf.len) break;
+            }
+        }
+    };
+    const server_thread = try std.Thread.spawn(.{}, Endpoint.run, .{ io, &server });
+    var server_finished = false;
+    defer if (!server_finished) {
+        server.deinit(io);
+        server_thread.join();
+    };
+
+    const base_url = try std.fmt.allocPrint(std.testing.allocator, "http://127.0.0.1:{d}", .{port});
+    defer std.testing.allocator.free(base_url);
+    const openai_provider = openai.init(std.testing.allocator, "test-key", "test-model", base_url);
+    defer openai_provider.deinit();
+    const ollama_provider = ollama.init(std.testing.allocator, "test-model", base_url);
+    defer ollama_provider.deinit();
+
+    const moves = [_]provider.Move{.{
+        .from = 8,
+        .to = 17,
+        .captured = @splat(0),
+        .num_captured = 0,
+    }};
+    const request: provider.Request = .{ .board_ascii = "board", .legal_moves = &moves };
+
+    const openai_response = try openai_provider.requestMove(std.testing.allocator, request);
+    defer std.testing.allocator.free(openai_response.reasoning);
+    try std.testing.expectEqualStrings("openai", openai_response.reasoning);
+    try std.testing.expectEqual(@as(u8, 17), openai_response.move.to);
+
+    const ollama_response = try ollama_provider.requestMove(std.testing.allocator, request);
+    defer std.testing.allocator.free(ollama_response.reasoning);
+    try std.testing.expectEqualStrings("ollama", ollama_response.reasoning);
+    try std.testing.expectEqual(@as(u8, 17), ollama_response.move.to);
+
+    server.deinit(io);
+    server_thread.join();
+    server_finished = true;
+}

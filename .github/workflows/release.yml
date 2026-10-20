@@ -147,10 +147,11 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # Stages the release as a DRAFT. It stays private until publish-release,
+  # which runs only after every asset, package and checksum is in place.
   release:
-    name: Attach assets to release
-    needs: [build, build-web]
-    if: ${{ always() && needs.build.result != 'cancelled' && needs.build-web.result != 'cancelled' }}
+    name: Stage release draft
+    needs: [build, build-web, build-man]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -162,23 +163,36 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Create or update GitHub Release
+      - name: Create or reuse draft and upload binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            gh release edit "${{ github.ref_name }}" --draft=false \
-              --repo "${{ github.repository }}"
-            gh release upload "${{ github.ref_name }}" artifacts/* \
-              --repo "${{ github.repository }}" \
-              --clobber
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release edit "$TAG" --draft=true --repo "$REPO"
+            # A retried draft must not keep assets from an earlier attempt.
+            for name in $(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name'); do
+              [ -e "artifacts/$name" ] || gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
+            done
           else
-            gh release create "${{ github.ref_name }}" \
-              --title "${{ github.ref_name }}" \
+            gh release create "$TAG" \
+              --title "$TAG" \
               --generate-notes \
-              --repo "${{ github.repository }}" \
-              artifacts/*
+              --draft \
+              --repo "$REPO"
           fi
+          gh release upload "$TAG" artifacts/* --repo "$REPO" --clobber
+
+  # Android TWA APK/AAB are uploaded to the same draft after it exists, so
+  # publish-release can verify them with the rest of the assets.
+  android:
+    name: Android APK/AAB
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/android.yml
+    secrets: inherit
 
   # ── Publish to npm ─────────────────────────────────────────────────────
   # Requires:
@@ -190,7 +204,7 @@ jobs:
   #       provenance (works with 2FA, no trusted publisher needed)
   publish-npm:
     name: Publish to npm
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -250,7 +264,7 @@ jobs:
   #      on vmvarela/homebrew-tap, or classic PAT with public_repo scope)
   update-homebrew:
     name: Update Homebrew tap
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
@@ -357,7 +371,7 @@ jobs:
   #   2. Secret: AUR_SSH_KEY (SSH private key authorized on AUR)
   update-aur:
     name: Update AUR package
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_AUR_TOKEN: ${{ secrets.AUR_SSH_KEY != '' }}
@@ -636,7 +650,7 @@ jobs:
   #   3. Secret: WINGET_GITHUB_TOKEN (classic PAT with public_repo scope)
   update-winget:
     name: Update WinGet manifest
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
@@ -659,7 +673,7 @@ jobs:
   #   2. Secret: SCOOP_BUCKET_TOKEN (PAT with contents:write on the bucket repo)
   update-scoop:
     name: Update Scoop bucket
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_SCOOP_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN != '' }}
@@ -737,17 +751,12 @@ jobs:
           git push
 
   # ── Generate final SHA256 checksums ────────────────────────────────
-  # Runs after all packaging jobs so sha256sums.txt covers all assets:
-  # binaries, web bundle, .deb, .rpm and .apk packages.
+  # Runs after all packaging jobs (all must succeed) and the Android upload,
+  # so sha256sums.txt covers all assets: binaries, web bundle, man page,
+  # .deb, .rpm, .apk packages and the Android APK/AAB.
   checksums:
     name: Generate SHA256 checksums
-    needs: [release, package-deb, package-rpm, package-apk]
-    if: >-
-      always()
-      && needs.release.result == 'success'
-      && (needs.package-deb.result == 'success' || needs.package-deb.result == 'skipped')
-      && (needs.package-rpm.result == 'success' || needs.package-rpm.result == 'skipped')
-      && (needs.package-apk.result == 'success' || needs.package-apk.result == 'skipped')
+    needs: [release, package-deb, package-rpm, package-apk, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -765,6 +774,15 @@ jobs:
       - name: Generate SHA256 checksums
         working-directory: assets
         run: |
+          # Fail before signing the list if an expected asset is missing
+          for name in damas-x86_64-linux damas-aarch64-linux damas-armv7-linux \
+            damas-riscv64-linux damas-x86-linux damas-x86_64-macos \
+            damas-aarch64-macos damas-x86_64-windows.exe damas-aarch64-windows.exe \
+            damas-x86-windows.exe damas-x86_64-freebsd damas-aarch64-freebsd \
+            damas-x86_64-netbsd damas-aarch64-netbsd damas.1.gz damas-web.zip \
+            app-release-signed.apk app-release-bundle.aab; do
+            [ -f "$name" ] || { echo "::error::missing asset $name" >&2; exit 1; }
+          done
           # Exclude any pre-existing sha256sums.txt to avoid self-referencing
           sha256sum $(ls | grep -v sha256sums.txt) | tee sha256sums.txt
 
@@ -776,6 +794,37 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
+  # ── Publish the GitHub Release ─────────────────────────────────────
+  # The only step that makes the release public. It re-downloads every
+  # asset from the draft and checks bytes and file set against sha256sums.txt.
+  publish-release:
+    name: Publish GitHub Release
+    needs: [release, package-deb, package-rpm, package-apk, android, checksums]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Verify draft assets against sha256sums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERIFY_DIR="$(mktemp -d)"
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --dir "$VERIFY_DIR"
+          cd "$VERIFY_DIR"
+          sha256sum --check sha256sums.txt
+          diff <(find . -maxdepth 1 -type f ! -name sha256sums.txt -exec basename {} \; | sort) \
+               <(awk '{ print $2 }' sha256sums.txt | sort)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false \
+            --repo "${{ github.repository }}"
+
   # ── Update Nix package versions ────────────────────────────────────
   # Pushes updated pkgs/damas/versions.json directly to
   # vmvarela/nix-packages so `nix run github:vmvarela/nix-packages#damas`
@@ -785,7 +834,7 @@ jobs:
   #   2. Secret: NIX_PACKAGES_TOKEN (PAT with contents:write on vmvarela/nix-packages)
   update-nix:
     name: Update Nix package
-    needs: checksums
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_NIX_TOKEN: ${{ secrets.NIX_PACKAGES_TOKEN != '' }}
@@ -861,10 +910,7 @@ jobs:
   #   2. Secret: APT_PACKAGES_TOKEN (PAT with contents:write on vmvarela/apt-packages)
   update-apt:
     name: Update APT repository
-    needs: package-deb
-    if: >-
-      always()
-      && needs.package-deb.result == 'success'
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_APT_TOKEN: ${{ secrets.APT_PACKAGES_TOKEN != '' }}
@@ -889,10 +935,7 @@ jobs:
   #   2. Secret: RPM_PACKAGES_TOKEN (PAT with contents:write on vmvarela/rpm-packages)
   update-rpm:
     name: Update RPM repository
-    needs: package-rpm
-    if: >-
-      always()
-      && needs.package-rpm.result == 'success'
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_RPM_TOKEN: ${{ secrets.RPM_PACKAGES_TOKEN != '' }}
@@ -917,10 +960,7 @@ jobs:
   #   2. Secret: APK_PACKAGES_TOKEN (PAT with contents:write on vmvarela/apk-packages)
   update-apk:
     name: Update APK repository
-    needs: package-apk
-    if: >-
-      always()
-      && needs.package-apk.result == 'success'
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_APK_TOKEN: ${{ secrets.APK_PACKAGES_TOKEN != '' }}

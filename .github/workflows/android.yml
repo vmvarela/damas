@@ -1,8 +1,9 @@
 name: Android APK
 
 on:
-  push:
-    tags: ['v*']
+  # Tag releases call this workflow from release.yml, after the draft exists.
+  # No tag trigger: a standalone run would race the release verification.
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -65,9 +66,11 @@ jobs:
             packaging/android/assetlinks.json
 
       - name: Publish release on tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        # draft: true keeps the release private; publish-release publishes it.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
+          draft: true
           files: |
             packaging/android/app-release-signed.apk
             packaging/android/app-release-bundle.aab

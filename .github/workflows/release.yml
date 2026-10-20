@@ -361,13 +361,13 @@ jobs:
   # ── Update AUR package ──────────────────────────────────────────────
   # Requires:
   #   1. AUR package registered: https://aur.archlinux.org/packages/damas
-  #   2. Secret: AUR_SSH_KEY (SSH private key authorized on AUR)
+  #   2. Secret: PACKAGE_SSH_KEY (SSH private key authorized on AUR)
   update-aur:
     name: Update AUR package
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_AUR_TOKEN: ${{ secrets.AUR_SSH_KEY != '' }}
+      HAS_AUR_TOKEN: ${{ secrets.PACKAGE_SSH_KEY != '' }}
     steps:
       - name: Download all artifacts
         if: ${{ env.HAS_AUR_TOKEN == 'true' }}
@@ -432,7 +432,7 @@ jobs:
           pkgbuild: ./PKGBUILD
           commit_username: vmvarela
           commit_email: vmvarela@gmail.com
-          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
+          ssh_private_key: ${{ secrets.PACKAGE_SSH_KEY }}
           commit_message: "Update to ${{ github.ref_name }}"
 
   # ── Build and upload .deb packages ─────────────────────────────────

@@ -110,7 +110,7 @@ BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.BUBBLEWRAP_KEYSTORE_PASSWORD }}
 
 | Step | Lines | What it does |
 |------|-------|--------------|
-| Triggers | `android.yml:4-6` | `v*` tags + `workflow_dispatch` |
+| Triggers | `android.yml:4-8` | `workflow_call` from `release.yml` + `workflow_dispatch` |
 | JDK 17 | `android.yml:18-22` | Temurin 17 via `setup-java` |
 | Android SDK | `android.yml:24-25` | `android-actions/setup-android` |
 | Licenses + build-tools + config | `android.yml:27-36` | Accept SDK licenses, install `build-tools;36.1.0`, write `~/.bubblewrap/config.json` |
@@ -119,7 +119,7 @@ BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.BUBBLEWRAP_KEYSTORE_PASSWORD }}
 | Build | `android.yml:44-50` | `bubblewrap build` → APK + AAB |
 | Verify fingerprint | `android.yml:52-56` | `apksigner verify` against the assetlinks fingerprint |
 | Upload | `android.yml:58-65` | Artifacts: APK, AAB, assetlinks.json |
-| Release | `android.yml:67-73` | Attach APK + AAB to the GitHub release on tag |
+| Release | `android.yml:67-76` | On a `v*` tag push, attach APK + AAB to the draft release (`draft: true`) |
 
 ## Code tour
 

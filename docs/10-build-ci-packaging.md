@@ -105,24 +105,30 @@ Windows (`.github/workflows/ci.yml:18-19`) through:
 **build-all.yml** (54 lines) — cross-compiles 14 targets on every push/PR
 (`.github/workflows/build-all.yml:3-8`): musl Linux (x86_64, aarch64, arm, riscv64, x86),
 macOS (x86_64, aarch64), Windows GNU (x86_64, aarch64, x86), FreeBSD
-(x86_64, aarch64), NetBSD (x86_64, aarch64) (`.github/workflows/build-all.yml:20-34`). All run
+(x86_64, aarch64) (`.github/workflows/build-all.yml:20-34`). All run
 on Ubuntu (`.github/workflows/build-all.yml:16`).
 
-**release.yml** (896 lines) — triggered by a `v*.*.*` tag
+**release.yml** — triggered by a `v*.*.*` tag
 (`.github/workflows/release.yml:3-6`). Jobs:
 
-- `build` — the same 14 targets, each with a release asset name and `.exe`
+- `build` — the 12 release targets (NetBSD removed, see PR #52), each with a release asset name and `.exe`
   extension where needed; the tag version (without `v`) is stamped via
   `-Dversion` (`.github/workflows/release.yml:75-81`).
 - `build-web` — `zig build web -Doptimize=ReleaseSafe`, zipped into
   `damas-web.zip` (`.github/workflows/release.yml:95-119`).
-- `release` — downloads all artifacts and creates or updates the GitHub
-  Release with `--generate-notes` (`.github/workflows/release.yml:121-161`).
+- `release` — stages a DRAFT release (create or reuse), removes stale assets
+  and uploads the artifacts with `--clobber` (`.github/workflows/release.yml:145-181`).
+- `android` — calls `android.yml` to upload the APK/AAB to the draft.
+- `checksums` — checks that every expected asset exists, then writes
+  `sha256sums.txt` (fails before signing if one is missing).
+- `publish-release` — downloads the draft's assets, runs `sha256sum --check`,
+  compares the file set with the manifest, and only then sets `draft=false`.
+  Every channel job depends on it.
 - Package jobs — deb (395), rpm (463), apk (527) via nfpm; npm (162),
   Homebrew (222), AUR (319), WinGet (595), Scoop (618), Nix (744), and apt/
   rpm/apk repository dispatches (820/848/876).
-- `checksums` — `sha256sums.txt` from all release assets, excluding itself
-  (`.github/workflows/release.yml:700-743`).
+- Channel jobs (npm, Homebrew, AUR, WinGet, Scoop, Nix, apt/rpm/apk) —
+  `needs: publish-release`; they run only after the public release is verified.
 
 Each package job has an explicit "Requires" comment listing the secrets and
 repos it needs — the jobs skip themselves when the config is absent, so a
@@ -136,8 +142,8 @@ job uses `deploy-pages` with the `github-pages` environment
 (`.github/workflows/pages.yml:44-54`). Concurrency is limited to one deployment at a time
 (`.github/workflows/pages.yml:11-13`).
 
-**android.yml** (73 lines) — builds the TWA APK/AAB on `v*` tags or manual
-dispatch (`.github/workflows/android.yml:3-6`): JDK 17 (temurin, `.github/workflows/android.yml:18-22`),
+**android.yml** (75 lines) — builds the TWA APK/AAB, called by `release.yml` after the
+draft exists, or by manual dispatch (`.github/workflows/android.yml:4-8`): JDK 17 (temurin, `.github/workflows/android.yml:18-22`),
 Bubblewrap 1.25.0 (`.github/workflows/android.yml:38-39`), signing keystore from
 `ANDROID_KEYSTORE_B64` (`.github/workflows/android.yml:41-42`), then `bubblewrap build`
 (`.github/workflows/android.yml:50`) and a fingerprint verification step
@@ -168,11 +174,13 @@ every push to `main`/`master` (16 lines, `.github/workflows/release-drafter.yml:
 ```mermaid
 flowchart TB
     tag["git tag v*.*.*"] --> release["release.yml"]
-    release --> build["build job<br/>14 cross targets<br/>-Dversion from tag"]
+    release --> build["build job<br/>12 release targets<br/>-Dversion from tag"]
     release --> web["build-web job<br/>damas-web.zip"]
-    build --> gh["GitHub Release<br/>create/update + checksums"]
+    build --> gh["draft GitHub Release<br/>+ checksums"]
     web --> gh
-    gh --> consumers["package jobs (opt-in via secrets)"]
+    gh --> android["android job<br/>TWA APK/AAB → draft"]
+    gh --> verify["publish-release<br/>verify sha256 → public"]
+    verify --> consumers["channel jobs (opt-in via secrets)"]
     consumers --> npm["npm @vmvarela/damas"]
     consumers --> hb["Homebrew tap"]
     consumers --> aur["AUR"]
@@ -180,7 +188,6 @@ flowchart TB
     consumers --> winget["WinGet + Scoop"]
     consumers --> nix["Nix packages repo"]
     consumers --> repos["apt / rpm / apk repos"]
-    tag --> android["android.yml<br/>TWA APK/AAB → release"]
 ```
 
 ## Code tour
@@ -201,9 +208,9 @@ flowchart TB
 |----------|---------|----------------------|
 | `ci.yml` | push/PR to master/main | Build + 6 test suites + web bundle + PWA meta tags + 4 smokes on 3 OSes |
 | `build-all.yml` | push/PR to master/main | Cross-compiles 14 targets (compile only) |
-| `release.yml` | tag `v*.*.*` | 14 binaries + damas-web.zip + sha256sums + package dispatches |
+| `release.yml` | tag `v*.*.*` | Binaries + damas-web.zip + packages + sha256sums; publishes only after verification |
 | `pages.yml` | push to master/main | Deploys `zig-out/web` to GitHub Pages |
-| `android.yml` | tag `v*` / manual | TWA APK + AAB, signed and fingerprint-verified |
+| `android.yml` | `release.yml` call / manual | TWA APK + AAB, signed and fingerprint-verified |
 | `release-drafter.yml` | push to master/main | Keeps a draft release updated |
 | `dependabot.yml` | schedule | Weekly GitHub Actions updates |
 

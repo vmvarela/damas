@@ -81,11 +81,12 @@ Windows (pin `0.17.0`). `.github/workflows/build-all.yml` cross-compiles the
 14 release targets on every PR.
 
 Tag `v*.*.*` triggers `.github/workflows/release.yml`:
-binaries for Linux (musl), macOS, Windows, FreeBSD and NetBSD; a
-`damas-web.zip` WASM bundle; `sha256sums.txt`; and — once the corresponding
-secrets/repos are configured — npm (`@vmvarela/damas`), the Homebrew tap, AUR,
-deb/rpm/apk via nfpm, WinGet, Scoop, Nix, and apt/rpm/apk repository
-dispatches.
+binaries for Linux (musl), macOS, Windows and FreeBSD; a `damas-web.zip` WASM
+bundle; the man page; the Android APK/AAB; deb/rpm/apk packages via nfpm; and
+`sha256sums.txt`. The release is staged as a draft and only published after
+every asset matches `sha256sums.txt`. Then, once the corresponding
+secrets/repos are configured, npm (`@vmvarela/damas`), the Homebrew tap, AUR,
+WinGet, Scoop, Nix, and apt/rpm/apk repository dispatches run.
 
 `.github/workflows/pages.yml` deploys the WASM bundle to GitHub Pages on every
 push to master/main (enable it: repo **Settings → Pages → Source: GitHub

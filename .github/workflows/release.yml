@@ -56,13 +56,6 @@ jobs:
           - target: aarch64-freebsd
             asset: damas-aarch64-freebsd
             ext: ""
-          # NetBSD
-          - target: x86_64-netbsd
-            asset: damas-x86_64-netbsd
-            ext: ""
-          - target: aarch64-netbsd
-            asset: damas-aarch64-netbsd
-            ext: ""
 
     steps:
       - uses: actions/checkout@v7
@@ -779,7 +772,7 @@ jobs:
             damas-riscv64-linux damas-x86-linux damas-x86_64-macos \
             damas-aarch64-macos damas-x86_64-windows.exe damas-aarch64-windows.exe \
             damas-x86-windows.exe damas-x86_64-freebsd damas-aarch64-freebsd \
-            damas-x86_64-netbsd damas-aarch64-netbsd damas.1.gz damas-web.zip \
+            damas.1.gz damas-web.zip \
             app-release-signed.apk app-release-bundle.aab; do
             [ -f "$name" ] || { echo "::error::missing asset $name" >&2; exit 1; }
           done
